@@ -155,6 +155,9 @@ final class AgentStore {
               let sid = json["session_id"] as? String else { responder.respond(""); return }
         let event = String(parts[1])
 
+        // Lintel's own usage check runs Claude Code in ~/.lintel — never show it as an agent.
+        if let cwd = json["cwd"] as? String, cwd.hasPrefix(AgentHooks.dir.path) { responder.respond(""); return }
+
         // Status line refreshes carry plan usage; they say nothing about activity, so stop here.
         if event == "StatusLine" {
             UsageStore.shared.applyClaudeStatusLine(json)
@@ -245,6 +248,7 @@ final class AgentStore {
             s.endTurn(message: json["last_assistant_message"] as? String)
             readTranscript(s)
             refreshTitle(s, force: true)
+            UsageStore.shared.probeClaude(minInterval: 60)
             let secs = Settings.shared.quickReplySeconds
             let blockedByStopHook = (json["stop_hook_active"] as? Bool) == true
             if secs > 0 && !blockedByStopHook {

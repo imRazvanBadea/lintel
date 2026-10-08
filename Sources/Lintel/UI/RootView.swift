@@ -23,7 +23,12 @@ struct RootView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .coordinateSpace(.named("panel"))
-        .onChange(of: model.expanded) { _, new in music.setVisible(new == .music) }
+        .onChange(of: model.expanded) { _, new in
+            music.setVisible(new == .music)
+            if new == .agents, store.sessions.contains(where: { $0.kind == .claude }) {
+                UsageStore.shared.probeClaude(minInterval: 60)
+            }
+        }
     }
 }
 

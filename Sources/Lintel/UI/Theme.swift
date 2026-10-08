@@ -25,7 +25,7 @@ enum Theme {
     static let primary = dynamic(light: NSColor(hex: 0x0D0D0D), dark: .white)
     static let secondary = dynamic(light: NSColor(hex: 0x5D5D5D), dark: NSColor(white: 1, alpha: 0.58))
     static let tertiary = dynamic(light: NSColor(hex: 0x8F8F8F), dark: NSColor(white: 1, alpha: 0.36))
-    static let hairline = dynamic(light: NSColor(white: 0, alpha: 0.08), dark: NSColor(white: 1, alpha: 0.09))
+    static let hairline = dynamic(light: NSColor(white: 0, alpha: 0.05), dark: NSColor(white: 1, alpha: 0.055))
     static let fill = dynamic(light: NSColor(white: 0, alpha: 0.045), dark: NSColor(white: 1, alpha: 0.07))
     static let fillStrong = dynamic(light: NSColor(white: 0, alpha: 0.08), dark: NSColor(white: 1, alpha: 0.12))
     /// Fill of the main action (black in light mode, white in dark) and the text on it.
@@ -76,8 +76,8 @@ struct CardBackground: ViewModifier {
             .background(shape.fill(gradient))
             // A faint highlight along the top edge gives the light card a little lift.
             .overlay(shape.strokeBorder(
-                LinearGradient(colors: scheme == .dark ? [Color.white.opacity(0.12), Color.white.opacity(0.05)]
-                                                       : [Color.white, Color.black.opacity(0.07)],
+                LinearGradient(colors: scheme == .dark ? [Color.white.opacity(0.07), Color.white.opacity(0.025)]
+                                                       : [Color.white, Color.black.opacity(0.045)],
                                startPoint: .top, endPoint: .bottom), lineWidth: 1))
             .clipShape(shape)
             .shadow(color: .black.opacity(scheme == .dark ? 0.45 : 0.12), radius: 28, y: 14)

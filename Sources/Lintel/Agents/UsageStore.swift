@@ -3,8 +3,9 @@ import Observation
 import SQLite3
 
 /// Plan usage per tool — how much of the short (5-hour) and weekly windows is used, and when they reset.
-///  - Claude: exact numbers from Claude Code's status line feed (`rate_limits`); otherwise the Claude app's
-///    own usage log (percentages, sampled every ~15 min; the reset time is then estimated).
+///  - Claude: exact numbers by asking Claude Code itself (`get_usage`, the request its /usage screen uses —
+///    no model call, hooks off, nothing saved) or from its status line feed; the Claude app's usage log
+///    (sampled every ~15 min) is only a fallback.
 ///  - Codex: `rate_limits` from its session logs (exact, with reset times).
 ///  - Cursor: only the plan is stored locally; usage itself lives behind Cursor's login.
 @MainActor @Observable
@@ -27,7 +28,9 @@ final class UsageStore {
 
     private(set) var usage: [AgentKind: Usage] = [:]
 
-    @ObservationIgnored private var lastStatusLine = Date.distantPast
+    @ObservationIgnored private var lastExact = Date.distantPast
+    @ObservationIgnored private var lastProbe = Date.distantPast
+    @ObservationIgnored private var probe: Process?
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private let claudeLog = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/Claude/plan-usage-history.json")
@@ -42,8 +45,9 @@ final class UsageStore {
     }
 
     private func refreshLocal() {
-        // The status line feed is exact; only fall back to the app log when it's gone quiet.
-        if Date().timeIntervalSince(lastStatusLine) > 10 * 60 { readClaudeAppLog() }
+        // Exact numbers while Claude is in use; the app's log only when we have nothing better.
+        if AgentStore.shared.sessions.contains(where: { $0.kind == .claude }) { probeClaude(minInterval: 170) }
+        if Date().timeIntervalSince(lastExact) > 15 * 60 { readClaudeAppLog() }
         if usage[.cursor]?.plan == nil, let plan = Self.cursorPlan() {
             usage[.cursor] = Usage(plan: plan.capitalized, note: "Usage is shown in Cursor's dashboard")
         }
@@ -76,8 +80,76 @@ final class UsageStore {
         u.weekly = window("seven_day") ?? u.weekly
         u.updatedAt = Date()
         u.note = nil
-        lastStatusLine = Date()
+        lastExact = Date()
         if u != usage[.claude] { usage[.claude] = u }
+    }
+
+    // MARK: Claude — ask Claude Code
+
+    /// Runs `claude -p` in stream-json mode and sends one `get_usage` control request.
+    func probeClaude(minInterval: TimeInterval = 60) {
+        guard probe == nil, Date().timeIntervalSince(lastProbe) > minInterval, let exe = Self.claudeExecutable() else { return }
+        lastProbe = Date()
+        let dir = AgentHooks.dir.appendingPathComponent("probe")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: exe)
+        p.arguments = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+                       "--no-session-persistence", "--settings", #"{"disableAllHooks":true}"#]
+        p.currentDirectoryURL = dir
+        let input = Pipe(), output = Pipe()
+        p.standardInput = input
+        p.standardOutput = output
+        p.standardError = FileHandle.nullDevice
+        var buffer = Data()
+        output.fileHandleForReading.readabilityHandler = { [weak self] h in
+            let chunk = h.availableData
+            if chunk.isEmpty { return }
+            buffer.append(chunk)
+            while let nl = buffer.firstIndex(of: UInt8(ascii: "\n")) {
+                let line = buffer[buffer.startIndex..<nl]
+                buffer.removeSubrange(buffer.startIndex...nl)
+                guard let d = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
+                      d["type"] as? String == "control_response",
+                      let resp = (d["response"] as? [String: Any])?["response"] as? [String: Any] else { continue }
+                h.readabilityHandler = nil
+                DispatchQueue.main.async {
+                    self?.applyClaudeUsage(resp)
+                    self?.finishProbe()
+                }
+            }
+        }
+        p.terminationHandler = { [weak self] _ in DispatchQueue.main.async { self?.probe = nil } }
+        do {
+            try p.run()
+            probe = p
+            let req = #"{"type":"control_request","request_id":"lintel","request":{"subtype":"get_usage","skip_behaviors":true}}"#
+            try input.fileHandleForWriting.write(contentsOf: Data((req + "\n").utf8))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 25) { [weak self] in self?.finishProbe() }
+        } catch {
+            probe = nil
+        }
+    }
+
+    private func finishProbe() {
+        guard let p = probe else { return }
+        if p.isRunning { p.terminate() }
+        probe = nil
+    }
+
+    private func applyClaudeUsage(_ resp: [String: Any]) {
+        guard let limits = resp["rate_limits"] as? [String: Any] else { return }
+        applyClaudeStatusLine(["rate_limits": limits])
+        if let plan = resp["subscription_type"] as? String {
+            usage[.claude]?.plan = plan.capitalized
+        }
+    }
+
+    nonisolated private static func claudeExecutable() -> String? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return ["\(home)/.local/bin/claude", "/opt/homebrew/bin/claude", "/usr/local/bin/claude", "\(home)/.claude/local/claude"]
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
     private func readClaudeAppLog() {

@@ -73,8 +73,16 @@ struct UsageFooter: View {
         if !kinds.isEmpty {
             VStack(spacing: 8) {
                 Divider().overlay(Theme.hairline)
-                ForEach(kinds, id: \.self) { k in
-                    if let u = usage.usage[k] { row(k, u) }
+                if kinds.count == 1, let k = kinds.first, let u = usage.usage[k] {
+                    fullRow(k, u)
+                } else {
+                    // Several tools at once: just the 5-hour window each, side by side.
+                    HStack(spacing: 14) {
+                        ForEach(kinds, id: \.self) { k in
+                            if let u = usage.usage[k] { compact(k, u) }
+                        }
+                        Spacer(minLength: 0)
+                    }
                 }
             }
             .padding(.horizontal, 16)
@@ -82,45 +90,89 @@ struct UsageFooter: View {
         }
     }
 
+    /// One tool: 5-hour + week + reset.
     @ViewBuilder
-    private func row(_ kind: AgentKind, _ u: UsageStore.Usage) -> some View {
+    private func fullRow(_ kind: AgentKind, _ u: UsageStore.Usage) -> some View {
         HStack(spacing: 12) {
-            Text(kind.label).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Theme.primary)
-                .frame(width: 46, alignment: .leading)
+            AgentLogo(kind: kind, size: 16)
             if let short = u.short {
-                meter("5h", short)
-                if let week = u.weekly { meter("Week", week) }
+                meter("5h", short, width: 46)
+                if let week = u.weekly { meter("Week", week, width: 46) }
                 Spacer(minLength: 4)
                 Text(resetText(short))
                     .font(.system(size: 11.5)).monospacedDigit()
                     .foregroundStyle(short.usedPercent >= 100 ? Theme.amber : Theme.tertiary)
-                    .lineLimit(1)
+                    .lineLimit(1).fixedSize()
             } else {
-                Text([u.plan.map { "\($0) plan" }, u.note].compactMap { $0 }.joined(separator: " · "))
-                    .font(.system(size: 11.5)).foregroundStyle(Theme.tertiary).lineLimit(1)
-                Spacer(minLength: 4)
-                if kind == .cursor {
-                    Button("Usage ↗") { NSWorkspace.shared.open(URL(string: "https://cursor.com/dashboard?tab=usage")!) }
-                        .buttonStyle(PillButtonStyle(kind: .quiet, height: 20))
-                        .font(.system(size: 11.5))
-                }
+                cursorInfo(u)
             }
         }
-        .help(u.short?.estimated == true ? "From the Claude app's usage log (updated every ~15 min); reset time estimated." : "")
+        .help(help(u))
     }
 
-    private func meter(_ label: String, _ w: UsageStore.Window) -> some View {
+    /// Several tools: logo, a short bar and what's left (or when it comes back).
+    @ViewBuilder
+    private func compact(_ kind: AgentKind, _ u: UsageStore.Usage) -> some View {
+        HStack(spacing: 6) {
+            AgentLogo(kind: kind, size: 15)
+            if let short = u.short {
+                bar(short, width: 30)
+                Text(short.usedPercent >= 100 ? resetText(short).replacingOccurrences(of: "Back in ", with: "↺ ")
+                                              : "\(Int(100 - min(100, short.usedPercent)))%")
+                    .font(.system(size: 11)).monospacedDigit()
+                    .foregroundStyle(short.usedPercent >= 100 ? Theme.amber : Theme.secondary)
+                    .lineLimit(1).fixedSize()
+            } else if kind == .cursor {
+                Button { Self.openCursorUsage() } label: {
+                    Text(u.plan ?? "Usage").font(.system(size: 11)).foregroundStyle(Theme.secondary)
+                    Image(systemName: "arrow.up.right").font(.system(size: 8.5, weight: .semibold)).foregroundStyle(Theme.tertiary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .help(help(u, kind: kind))
+    }
+
+    @ViewBuilder
+    private func cursorInfo(_ u: UsageStore.Usage) -> some View {
+        Text([u.plan.map { "\($0) plan" }, u.note].compactMap { $0 }.joined(separator: " · "))
+            .font(.system(size: 11.5)).foregroundStyle(Theme.tertiary).lineLimit(1)
+        Spacer(minLength: 4)
+        Button("Usage ↗") { Self.openCursorUsage() }
+            .buttonStyle(PillButtonStyle(kind: .quiet, height: 20))
+            .font(.system(size: 11.5))
+    }
+
+    private static func openCursorUsage() {
+        NSWorkspace.shared.open(URL(string: "https://cursor.com/dashboard?tab=usage")!)
+    }
+
+    private func help(_ u: UsageStore.Usage, kind: AgentKind? = nil) -> String {
+        var parts: [String] = []
+        if let k = kind { parts.append(k.label) }
+        if let s = u.short { parts.append("5-hour: \(Int(s.usedPercent))% used") }
+        if let w = u.weekly { parts.append("week: \(Int(w.usedPercent))% used") }
+        if let s = u.short, s.resetsAt != nil { parts.append(resetText(s).lowercased()) }
+        if u.short?.estimated == true { parts.append("estimated from the Claude app's log") }
+        return parts.joined(separator: " · ")
+    }
+
+    private func bar(_ w: UsageStore.Window, width: CGFloat) -> some View {
         let used = min(100, max(0, w.usedPercent))
         let color: Color = used >= 100 ? Theme.red : (used >= 80 ? Theme.amber : Theme.primary.opacity(0.75))
-        return HStack(spacing: 5) {
+        return ZStack(alignment: .leading) {
+            Capsule().fill(Theme.fillStrong)
+            Capsule().fill(color).frame(width: width * used / 100)
+        }
+        .frame(width: width, height: 4)
+    }
+
+    private func meter(_ label: String, _ w: UsageStore.Window, width: CGFloat) -> some View {
+        HStack(spacing: 5) {
             Text(label).font(.system(size: 10.5)).foregroundStyle(Theme.tertiary).fixedSize()
-            ZStack(alignment: .leading) {
-                Capsule().fill(Theme.fillStrong)
-                Capsule().fill(color).frame(width: 34 * used / 100)
-            }
-            .frame(width: 34, height: 4)
-            Text("\(Int(100 - used))% left").font(.system(size: 11)).monospacedDigit().foregroundStyle(Theme.secondary)
-                .lineLimit(1).fixedSize()
+            bar(w, width: width)
+            Text("\(Int(100 - min(100, max(0, w.usedPercent))))% left").font(.system(size: 11)).monospacedDigit()
+                .foregroundStyle(Theme.secondary).lineLimit(1).fixedSize()
         }
     }
 
@@ -133,6 +185,39 @@ struct UsageFooter: View {
         else if mins < 24 * 60 { when = "\(mins / 60)h \(mins % 60)m" }
         else { when = r.formatted(.dateTime.weekday(.abbreviated).hour().minute()) }
         return w.usedPercent >= 100 ? "Back in \(approx)\(when)" : "Resets in \(approx)\(when)"
+    }
+}
+
+/// The tool's own app icon (Claude, Cursor, Codex), so rows stay short.
+struct AgentLogo: View {
+    let kind: AgentKind
+    var size: CGFloat = 16
+
+    private static var cache: [AgentKind: NSImage] = [:]
+    private static let bundleIDs: [AgentKind: [String]] = [
+        .claude: ["com.anthropic.claudefordesktop"],
+        .cursor: ["com.todesktop.230313mzl4w4u92"],
+        .codex: ["com.openai.codex", "com.openai.chat"],
+    ]
+
+    private var image: NSImage? {
+        if let i = Self.cache[kind] { return i }
+        for id in Self.bundleIDs[kind] ?? [] {
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
+                let i = NSWorkspace.shared.icon(forFile: url.path)
+                Self.cache[kind] = i
+                return i
+            }
+        }
+        return nil
+    }
+
+    var body: some View {
+        if let image {
+            Image(nsImage: image).resizable().interpolation(.high).frame(width: size, height: size)
+        } else {
+            Text(kind.label).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.primary)
+        }
     }
 }
 
