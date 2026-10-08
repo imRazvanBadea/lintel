@@ -40,6 +40,7 @@ final class NotchController {
             .environment(AgentStore.shared)
             .environment(NowPlaying.shared)
             .environment(Settings.shared)
+            .environment(UsageStore.shared)
         let host = NSHostingView(rootView: root)
         host.sizingOptions = []
         host.wantsLayer = true

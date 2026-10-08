@@ -77,10 +77,16 @@ struct SettingsView: View {
             }
 
             Section("General") {
+                Toggle("Show icon in the menu bar", isOn: $s.showMenuBarIcon)
+                if !settings.showMenuBarIcon {
+                    Text("To get back here, open Lintel again (Spotlight or Finder) or press ⌃⌥, (Control-Option-comma).")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Toggle("Launch at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, v in settings.launchAtLogin = v }
                 LabeledContent("Agents", value: "⌃⌥Space")
                 LabeledContent("Music", value: "⌃⌥M")
+                LabeledContent("Settings", value: "⌃⌥,")
                 LabeledContent("Jump to session (card open)", value: "⌘1 … ⌘9")
             }
         }

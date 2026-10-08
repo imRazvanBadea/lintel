@@ -12,6 +12,8 @@ final class IslandModel {
     var expanded: Island?
     /// Session shown in the agent detail view (nil = list).
     var selectedSessionID: String?
+    /// Set by the back button: show the session list instead of the latest "Finished" card.
+    var showingList = false
 
     // Geometry of the screen the panel is on.
     var menuBarHeight: CGFloat = 24
@@ -54,7 +56,7 @@ final class IslandModel {
 
     func expand(_ island: Island, pinned: Bool = false) {
         collapseWork?.cancel()
-        if island != expanded { selectedSessionID = nil }
+        if island != expanded { selectedSessionID = nil; showingList = false }
         pinnedByEvent = pinned
         withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) { expanded = island }
     }
@@ -71,6 +73,8 @@ final class IslandModel {
             expanded = nil
         }
         cardRect = .zero
+        selectedSessionID = nil
+        showingList = false
         NotificationCenter.default.post(name: .lintelCollapsed, object: nil)
     }
 }

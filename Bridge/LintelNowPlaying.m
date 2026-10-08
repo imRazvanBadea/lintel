@@ -12,6 +12,7 @@ typedef void (*MRGetBool)(dispatch_queue_t, void (^)(BOOL));
 typedef void (*MRGetPID)(dispatch_queue_t, void (^)(int));
 typedef void (*MRRegister)(dispatch_queue_t);
 typedef BOOL (*MRSendCommand)(int, NSDictionary *);
+typedef void (*MRSetElapsed)(double);
 typedef id (*MRQueueRequestCreate)(long, long);
 typedef void (*MRRequestQueue)(id, id, dispatch_queue_t, void (^)(id, NSError *));
 typedef NSArray *(*MRQueueCopyItems)(id);
@@ -20,6 +21,7 @@ static MRGetInfo getInfo;
 static MRGetBool getIsPlaying;
 static MRGetPID getPID;
 static MRSendCommand sendCommand;
+static MRSetElapsed setElapsed;
 static MRQueueRequestCreate queueRequestCreate;
 static MRRequestQueue requestQueue;
 static MRQueueCopyItems queueCopyItems;
@@ -109,6 +111,7 @@ void lintel_np_run(void *perl, void *cv) {
         getIsPlaying = (MRGetBool)dlsym(h, "MRMediaRemoteGetNowPlayingApplicationIsPlaying");
         getPID = (MRGetPID)dlsym(h, "MRMediaRemoteGetNowPlayingApplicationPID");
         sendCommand = (MRSendCommand)dlsym(h, "MRMediaRemoteSendCommand");
+        setElapsed = (MRSetElapsed)dlsym(h, "MRMediaRemoteSetElapsedTime");
         queueRequestCreate = (MRQueueRequestCreate)dlsym(h, "MRPlaybackQueueRequestCreateDefaultWithRange");
         requestQueue = (MRRequestQueue)dlsym(h, "MRMediaRemoteRequestNowPlayingPlaybackQueueForPlayer");
         queueCopyItems = (MRQueueCopyItems)dlsym(h, "MRPlaybackQueueCopyContentItems");
@@ -146,6 +149,7 @@ void lintel_np_run(void *perl, void *cv) {
                 else if ([cmd isEqualToString:@"prev"]) sendCommand(5, nil);
                 else if ([cmd isEqualToString:@"refresh"]) refresh();
                 else if ([cmd isEqualToString:@"artwork"]) { lastArtworkKey = nil; refresh(); }
+                else if ([cmd hasPrefix:@"seek "] && setElapsed) setElapsed([[cmd substringFromIndex:5] doubleValue]);
                 else if ([cmd hasPrefix:@"skip "]) {
                     // Jump to the Nth upcoming track by skipping forward (works for any player).
                     int n = MAX(1, MIN(20, [[cmd substringFromIndex:5] intValue]));

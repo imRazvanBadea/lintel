@@ -38,6 +38,7 @@ final class Settings {
     /// Hold Cursor's shell commands until you approve them in the notch (Cursor's own allowlist still applies after).
     var cursorShellApprovals: Bool { didSet { d.set(cursorShellApprovals, forKey: "cursorShellApprovals") } }
     var musicEnabled: Bool { didSet { d.set(musicEnabled, forKey: "musicEnabled") } }
+    var showMenuBarIcon: Bool { didSet { d.set(showMenuBarIcon, forKey: "showMenuBarIcon"); onMenuBarIconChange?() } }
     var showUpNext: Bool { didSet { d.set(showUpNext, forKey: "showUpNext") } }
 
     var launchAtLogin: Bool {
@@ -51,6 +52,7 @@ final class Settings {
 
     @ObservationIgnored var onDisplayChange: (() -> Void)?
     @ObservationIgnored var onAppearanceChange: (() -> Void)?
+    @ObservationIgnored var onMenuBarIconChange: (() -> Void)?
 
     var nsAppearance: NSAppearance? {
         switch appearance {
@@ -73,6 +75,7 @@ final class Settings {
             "musicEnabled": true,
             "cursorShellApprovals": false,
             "showUpNext": true,
+            "showMenuBarIcon": true,
         ])
         appearance = AppearanceChoice(rawValue: d.string(forKey: "appearance") ?? "") ?? .system
         display = DisplayChoice(rawValue: d.string(forKey: "display2") ?? "") ?? .follow
@@ -84,5 +87,6 @@ final class Settings {
         musicEnabled = d.bool(forKey: "musicEnabled")
         cursorShellApprovals = d.bool(forKey: "cursorShellApprovals")
         showUpNext = d.bool(forKey: "showUpNext")
+        showMenuBarIcon = d.bool(forKey: "showMenuBarIcon")
     }
 }

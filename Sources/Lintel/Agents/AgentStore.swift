@@ -68,13 +68,14 @@ final class AgentStore {
     }
 
     /// Drops sessions whose process went away, and quiets stale ones.
+    /// How long a session stays in the list after its last activity (finished ones included).
+    static let keepAlive: TimeInterval = 60 * 60
+
+    /// Hides sessions that have had no news for an hour.
     private func sweep() {
         let now = Date()
-        for s in sessions {
-            if s.kind == .claude, let pid = s.agentPID, !Proc.isAlive(pid) { remove(s.id); continue }
-            let quiet = now.timeIntervalSince(s.lastEventAt)
-            if s.status == .finished && quiet > 15 * 60 && !pending.contains(where: { $0.sessionID == s.id }) { s.status = .idle }
-            if s.kind == .claude && s.agentPID == nil && quiet > 3 * 3600 { remove(s.id) }
+        for s in sessions where now.timeIntervalSince(s.lastEventAt) > Self.keepAlive {
+            if !pending.contains(where: { $0.sessionID == s.id && $0.isBlocking }) { remove(s.id) }
         }
         // Resolve quick-reply windows that ran out.
         for p in pending {
@@ -153,6 +154,13 @@ final class AgentStore {
         guard let json = (try? JSONSerialization.jsonObject(with: req.body)) as? [String: Any],
               let sid = json["session_id"] as? String else { responder.respond(""); return }
         let event = String(parts[1])
+
+        // Status line refreshes carry plan usage; they say nothing about activity, so stop here.
+        if event == "StatusLine" {
+            UsageStore.shared.applyClaudeStatusLine(json)
+            responder.respond("")
+            return
+        }
 
         if event == "SessionEnd" {
             remove(sid)
@@ -369,6 +377,7 @@ final class AgentStore {
         finishedFlash = s.id
         model.expand(.agents, pinned: true)
         model.selectedSessionID = nil
+        model.showingList = false
         let id = s.id
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
             guard let self, self.finishedFlash == id else { return }

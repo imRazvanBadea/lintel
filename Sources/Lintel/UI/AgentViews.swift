@@ -8,26 +8,131 @@ struct AgentCard: View {
 
     var body: some View {
         Group {
-            if let p = store.pending.first(where: { $0.isBlocking }), let s = store.existing(p.sessionID) {
+            if let id = model.selectedSessionID, let s = store.existing(id),
+               let p = store.pending.first(where: { $0.sessionID == id && $0.isBlocking }) {
+                AttentionView(request: p, session: s, queued: 0)
+            } else if let id = model.selectedSessionID, let s = store.existing(id),
+                      let p = store.pending.first(where: { $0.sessionID == id && !$0.isBlocking }) {
+                FinishedView(session: s, reply: p)
+            } else if !model.showingList, model.selectedSessionID == nil,
+               let p = store.pending.first(where: { $0.isBlocking }), let s = store.existing(p.sessionID) {
                 AttentionView(request: p, session: s, queued: store.pending.filter(\.isBlocking).count - 1)
-            } else if model.selectedSessionID == nil, let p = store.pending.last(where: { !$0.isBlocking }),
+            } else if !model.showingList, model.selectedSessionID == nil, let p = store.pending.last(where: { !$0.isBlocking }),
                       let s = store.existing(p.sessionID) {
                 FinishedView(session: s, reply: p)
-            } else if model.selectedSessionID == nil, let id = store.finishedFlash, let s = store.existing(id) {
+            } else if !model.showingList, model.selectedSessionID == nil, let id = store.finishedFlash, let s = store.existing(id) {
                 FinishedView(session: s, reply: nil)
-            } else if let id = model.selectedSessionID ?? (store.sessions.count == 1 ? store.sessions.first?.id : nil),
+            } else if let id = model.selectedSessionID ?? (store.sessions.count == 1 && !model.showingList ? store.sessions.first?.id : nil),
                       let s = store.existing(id) {
-                SessionDetailView(session: s, showBack: store.sessions.count > 1)
+                VStack(spacing: 0) {
+                    SessionDetailView(session: s, showBack: store.sessions.count > 1 || !store.pending.isEmpty)
+                    UsageFooter()
+                }
             } else if store.sessions.isEmpty {
                 EmptyAgentsView()
             } else {
-                SessionListView()
+                VStack(spacing: 0) {
+                    SessionListView()
+                    UsageFooter()
+                }
             }
         }
         .frame(width: 440)
         .card()
         .animation(.spring(response: 0.35, dampingFraction: 0.86), value: model.selectedSessionID)
+        .animation(.spring(response: 0.35, dampingFraction: 0.86), value: model.showingList)
         .animation(.spring(response: 0.35, dampingFraction: 0.86), value: store.pending.map(\.id))
+    }
+}
+
+/// "‹" — back to the list of all agents.
+struct BackButton: View {
+    var body: some View {
+        Button {
+            IslandModel.shared.selectedSessionID = nil
+            IslandModel.shared.showingList = true
+        } label: { Image(systemName: "chevron.left") }
+        .buttonStyle(IconButtonStyle(size: 26))
+        .help("All agents")
+    }
+}
+
+// MARK: Usage
+
+/// Plan usage for each tool that has a session open: the 5-hour window, the week, and when it resets.
+struct UsageFooter: View {
+    @Environment(AgentStore.self) private var store
+    @Environment(UsageStore.self) private var usage
+
+    private var kinds: [AgentKind] {
+        let active = Set(store.sessions.map(\.kind))
+        return [AgentKind.claude, .cursor, .codex].filter { active.contains($0) && usage.usage[$0] != nil }
+    }
+
+    var body: some View {
+        if !kinds.isEmpty {
+            VStack(spacing: 8) {
+                Divider().overlay(Theme.hairline)
+                ForEach(kinds, id: \.self) { k in
+                    if let u = usage.usage[k] { row(k, u) }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 14)
+        }
+    }
+
+    @ViewBuilder
+    private func row(_ kind: AgentKind, _ u: UsageStore.Usage) -> some View {
+        HStack(spacing: 12) {
+            Text(kind.label).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Theme.primary)
+                .frame(width: 46, alignment: .leading)
+            if let short = u.short {
+                meter("5h", short)
+                if let week = u.weekly { meter("Week", week) }
+                Spacer(minLength: 4)
+                Text(resetText(short))
+                    .font(.system(size: 11.5)).monospacedDigit()
+                    .foregroundStyle(short.usedPercent >= 100 ? Theme.amber : Theme.tertiary)
+                    .lineLimit(1)
+            } else {
+                Text([u.plan.map { "\($0) plan" }, u.note].compactMap { $0 }.joined(separator: " · "))
+                    .font(.system(size: 11.5)).foregroundStyle(Theme.tertiary).lineLimit(1)
+                Spacer(minLength: 4)
+                if kind == .cursor {
+                    Button("Usage ↗") { NSWorkspace.shared.open(URL(string: "https://cursor.com/dashboard?tab=usage")!) }
+                        .buttonStyle(PillButtonStyle(kind: .quiet, height: 20))
+                        .font(.system(size: 11.5))
+                }
+            }
+        }
+        .help(u.short?.estimated == true ? "From the Claude app's usage log (updated every ~15 min); reset time estimated." : "")
+    }
+
+    private func meter(_ label: String, _ w: UsageStore.Window) -> some View {
+        let used = min(100, max(0, w.usedPercent))
+        let color: Color = used >= 100 ? Theme.red : (used >= 80 ? Theme.amber : Theme.primary.opacity(0.75))
+        return HStack(spacing: 5) {
+            Text(label).font(.system(size: 10.5)).foregroundStyle(Theme.tertiary).fixedSize()
+            ZStack(alignment: .leading) {
+                Capsule().fill(Theme.fillStrong)
+                Capsule().fill(color).frame(width: 34 * used / 100)
+            }
+            .frame(width: 34, height: 4)
+            Text("\(Int(100 - used))% left").font(.system(size: 11)).monospacedDigit().foregroundStyle(Theme.secondary)
+                .lineLimit(1).fixedSize()
+        }
+    }
+
+    private func resetText(_ w: UsageStore.Window) -> String {
+        guard let r = w.resetsAt else { return w.usedPercent >= 100 ? "Limit reached" : "" }
+        let mins = Int(r.timeIntervalSinceNow / 60)
+        let approx = w.estimated ? "~" : ""
+        let when: String
+        if mins < 60 { when = "\(max(1, mins))m" }
+        else if mins < 24 * 60 { when = "\(mins / 60)h \(mins % 60)m" }
+        else { when = r.formatted(.dateTime.weekday(.abbreviated).hour().minute()) }
+        return w.usedPercent >= 100 ? "Back in \(approx)\(when)" : "Resets in \(approx)\(when)"
     }
 }
 
@@ -128,8 +233,7 @@ struct SessionDetailView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
                 if showBack {
-                    Button { IslandModel.shared.selectedSessionID = nil } label: { Image(systemName: "chevron.left") }
-                        .buttonStyle(IconButtonStyle(size: 26))
+                    BackButton()
                 }
                 Avatar(session: session, size: 24)
                     .padding(.horizontal, 2)
@@ -237,6 +341,7 @@ struct AttentionView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
+                BackButton()
                 Avatar(session: session, size: 22, showsActivity: false)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(headline).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.primary)
@@ -471,6 +576,7 @@ struct FinishedView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
+                BackButton()
                 Avatar(session: session, size: 22, showsActivity: false)
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 6) {

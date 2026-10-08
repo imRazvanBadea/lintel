@@ -21,7 +21,7 @@ final class CodexWatcher {
     private var timer: Timer?
 
     /// Only sessions touched this recently are shown.
-    private let liveWindow: TimeInterval = 30 * 60
+    private var liveWindow: TimeInterval { AgentStore.keepAlive }
 
     init(store: AgentStore) { self.store = store }
 
@@ -46,7 +46,7 @@ final class CodexWatcher {
 
     private func expire() {
         guard let store else { return }
-        for s in store.sessions where s.kind == .codex && s.status != .working {
+        for s in store.sessions where s.kind == .codex {
             if Date().timeIntervalSince(s.lastEventAt) > liveWindow { store.remove(s.id) }
         }
     }
@@ -195,6 +195,7 @@ final class CodexWatcher {
                     s.turnEndedAt = Date()
                     clearExternal(s)
                 case "token_count":
+                    if let rl = p["rate_limits"] as? [String: Any] { UsageStore.shared.applyCodex(rl) }
                     if let info = p["info"] as? [String: Any], let last = info["last_token_usage"] as? [String: Any] {
                         s.tokens = (last["input_tokens"] as? Int ?? 0) + (last["output_tokens"] as? Int ?? 0)
                     }

@@ -91,6 +91,16 @@ final class NowPlaying {
         state = s
     }
     func next() { bridge.send("next") }
+
+    /// Jump to a point in the current track (seconds).
+    func seek(to seconds: Double) {
+        guard var s = state, s.duration > 0 else { return }
+        let t = min(max(0, seconds), s.duration - 0.5)
+        bridge.send(String(format: "seek %.2f", t))
+        s.position = t
+        s.updatedAt = Date()
+        state = s
+    }
     func previous() { bridge.send("prev") }
 
     func openSource() {

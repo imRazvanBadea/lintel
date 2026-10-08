@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AgentStore.shared.start()
+        UsageStore.shared.start()
         NowPlaying.shared.start()
         notch = NotchController()
 
@@ -21,6 +22,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             IslandModel.shared.toggle(.agents)
             if IslandModel.shared.expanded != nil { self?.notch.focus() }
         }
+        // ⌃⌥, : Settings (always reachable, even with the menu-bar icon hidden)
+        Hotkeys.shared.register(keyCode: kVK_ANSI_Comma, modifiers: controlKey | optionKey) { [weak self] in
+            self?.showSettings()
+        }
         Hotkeys.shared.register(keyCode: kVK_ANSI_M, modifiers: controlKey | optionKey) { [weak self] in
             IslandModel.shared.toggle(.music)
             if IslandModel.shared.expanded != nil { self?.notch.focus() }
@@ -28,6 +33,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         AgentStore.shared.onAttention = { [weak self] in
             guard Settings.shared.autoExpandOnAttention else { return }
+            IslandModel.shared.selectedSessionID = nil
+            IslandModel.shared.showingList = false
             IslandModel.shared.expand(.agents, pinned: true)
             _ = self
         }
@@ -95,6 +102,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
+        statusItem.isVisible = Settings.shared.showMenuBarIcon
+        Settings.shared.onMenuBarIconChange = { [weak self] in
+            self?.statusItem.isVisible = Settings.shared.showMenuBarIcon
+        }
+    }
+
+    /// Opening Lintel again (Spotlight, Finder, Dock) brings up Settings — the way back when the icon is hidden.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showSettings()
+        return false
+    }
+
+    @objc private func hideMenuBarIcon() {
+        Settings.shared.showMenuBarIcon = false
     }
 
     /// A tiny notch with two wings — drawn as a template so it follows the menu bar's colour.
@@ -140,6 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         appearance.submenu = sub
         menu.addItem(appearance)
         menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",").target = self
+        menu.addItem(withTitle: "Hide Menu Bar Icon", action: #selector(hideMenuBarIcon), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Lintel", action: #selector(quit), keyEquivalent: "q").target = self
     }

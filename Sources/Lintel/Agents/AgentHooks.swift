@@ -93,6 +93,11 @@ enum AgentHooks {
         }
         root["hooks"] = hooks
         if t == .cursor, root["version"] == nil { root["version"] = 1 }
+        // Claude Code hands its status line command the plan usage (5-hour / weekly, with reset times).
+        // Only claim the status line if you don't already have one; Lintel prints nothing, so it stays empty.
+        if t == .claude, root["statusLine"] == nil {
+            root["statusLine"] = ["type": "command", "command": "\(scriptURL.path) claude StatusLine", "padding": 0]
+        }
         try save(root, to: t)
     }
 
@@ -104,6 +109,9 @@ enum AgentHooks {
             if entries.isEmpty { hooks.removeValue(forKey: key) } else { hooks[key] = entries }
         }
         if hooks.isEmpty && t == .claude { root.removeValue(forKey: "hooks") } else { root["hooks"] = hooks }
+        if let sl = root["statusLine"] as? [String: Any], ((sl["command"] as? String) ?? "").contains(marker) {
+            root.removeValue(forKey: "statusLine")
+        }
         try save(root, to: t)
     }
 

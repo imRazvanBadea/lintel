@@ -71,25 +71,7 @@ struct MusicCard: View {
             }
 
             if s.duration > 0 {
-                TimelineView(.periodic(from: .now, by: s.isPlaying ? 0.5 : 60)) { _ in
-                    let pos = music.currentPosition
-                    VStack(spacing: 5) {
-                        GeometryReader { g in
-                            ZStack(alignment: .leading) {
-                                Capsule().fill(Theme.fillStrong)
-                                Capsule().fill(Theme.action)
-                                    .frame(width: g.size.width * min(1, pos / max(1, s.duration)))
-                            }
-                        }
-                        .frame(height: 4)
-                        HStack {
-                            Text(timeString(pos))
-                            Spacer()
-                            Text("-" + timeString(max(0, s.duration - pos)))
-                        }
-                        .font(.system(size: 11, design: .rounded)).monospacedDigit().foregroundStyle(Theme.tertiary)
-                    }
-                }
+                Scrubber(duration: s.duration, playing: s.isPlaying)
             }
 
             HStack(spacing: 32) {
@@ -133,6 +115,58 @@ struct MusicCard: View {
     }
 
     private func timeString(_ t: Double) -> String {
+        guard t.isFinite else { return "0:00" }
+        let s = Int(t)
+        return String(format: "%d:%02d", s / 60, s % 60)
+    }
+}
+
+/// Progress bar you can click or drag to jump around in the song.
+struct Scrubber: View {
+    @Environment(NowPlaying.self) private var music
+    let duration: Double
+    let playing: Bool
+    @State private var dragging: Double?   // 0…1 while the finger/mouse is down
+    @State private var hover = false
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: playing && dragging == nil ? 0.5 : 60)) { _ in
+            let fraction = dragging ?? min(1, music.currentPosition / max(1, duration))
+            VStack(spacing: 5) {
+                GeometryReader { g in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Theme.fillStrong)
+                        Capsule().fill(Theme.action).frame(width: g.size.width * fraction)
+                        Circle().fill(Theme.action)
+                            .frame(width: 12, height: 12)
+                            .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
+                            .offset(x: g.size.width * fraction - 6)
+                            .opacity(hover || dragging != nil ? 1 : 0)
+                    }
+                    .frame(height: hover || dragging != nil ? 6 : 4)
+                    .frame(maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .gesture(DragGesture(minimumDistance: 0)
+                        .onChanged { v in dragging = min(1, max(0, v.location.x / g.size.width)) }
+                        .onEnded { v in
+                            music.seek(to: min(1, max(0, v.location.x / g.size.width)) * duration)
+                            dragging = nil
+                        })
+                }
+                .frame(height: 14)
+                .onHover { hover = $0 }
+                .animation(.easeOut(duration: 0.15), value: hover)
+                HStack {
+                    Text(Self.time(fraction * duration))
+                    Spacer()
+                    Text("-" + Self.time(max(0, duration - fraction * duration)))
+                }
+                .font(.system(size: 11, design: .rounded)).monospacedDigit().foregroundStyle(Theme.tertiary)
+            }
+        }
+    }
+
+    static func time(_ t: Double) -> String {
         guard t.isFinite else { return "0:00" }
         let s = Int(t)
         return String(format: "%d:%02d", s / 60, s % 60)
