@@ -51,6 +51,7 @@ struct SettingsView: View {
                     Text("15 seconds").tag(15)
                     Text("25 seconds").tag(25)
                     Text("60 seconds").tag(60)
+                    Text("2 minutes").tag(120)
                 }
                 Text("Keeps a finished Claude Code or Cursor turn open briefly, so a reply typed in the notch continues the same session.")
                     .font(.caption).foregroundStyle(.secondary)

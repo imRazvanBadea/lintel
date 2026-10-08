@@ -155,13 +155,13 @@ struct AgentCapsule: View {
                 Avatar(session: s, size: height * 0.62)
                 Text("Needs you").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Theme.amber)
                 Text(s.displayTitle).font(.system(size: 12.5)).foregroundStyle(Theme.secondary)
-                    .lineLimit(1).frame(maxWidth: 160, alignment: .leading)
+                    .lineLimit(1).frame(maxWidth: 150, alignment: .leading)
             } else if let s = busy {
                 Avatar(session: s, size: height * 0.62)
                 Text(s.phase.label).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Theme.primary)
                     .contentTransition(.opacity)
                 Text(s.displayTitle).font(.system(size: 12.5)).foregroundStyle(Theme.secondary)
-                    .lineLimit(1).frame(maxWidth: 160, alignment: .leading)
+                    .lineLimit(1).frame(maxWidth: 150, alignment: .leading)
                 if store.working.count > 1 {
                     Text("+\(store.working.count - 1)").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.tertiary)
                 }
@@ -177,6 +177,7 @@ struct AgentCapsule: View {
             }
         }
         .padding(.horizontal, store.sessions.isEmpty ? 8 : 10)
+        .fixedSize(horizontal: true, vertical: false)
         .frame(height: height)
         .background(CapsuleBackground())
         .contentShape(Capsule())
@@ -196,13 +197,15 @@ struct MusicCapsule: View {
             if let s = music.state {
                 Artwork(image: music.artwork, size: height * 0.66, radius: 5)
                 Text(s.track.title).font(.system(size: 12.5, weight: .medium)).foregroundStyle(Theme.primary)
-                    .lineLimit(1).frame(maxWidth: 140, alignment: .leading)
+                    .lineLimit(1).frame(maxWidth: 92, alignment: .leading)
                 Equalizer(color: music.tint, playing: s.isPlaying)
                     .frame(width: 14, height: height * 0.4)
             }
         }
         .padding(.leading, 5)
         .padding(.trailing, 10)
+        // Size to the content: short titles give a short capsule; long ones truncate at the cap.
+        .fixedSize(horizontal: true, vertical: false)
         .frame(height: height)
         .background(CapsuleBackground())
         .contentShape(Capsule())

@@ -85,6 +85,19 @@ final class WebQueueReader {
         }
     }
 
+    /// Starts the queue item `offset` places after the current one, as if you clicked it on the page.
+    func playQueueItem(bundleID: String, offset: Int) {
+        let js = "(function(){var q=Array.prototype.slice.call(document.querySelectorAll('ytmusic-player-queue-item'));" +
+            "var i=-1;for(var k=0;k<q.length;k++){if(q[k].hasAttribute('selected')){i=k;break;}}" +
+            "var t=q[i+\(offset)];if(!t){return 'NO';}" +
+            "var b=t.querySelector('ytmusic-play-button-renderer')||t.querySelector('.song-info')||t;b.click();return 'OK';})()"
+        ScriptRunner.shared.run(script(bundleID: bundleID, js: js)) { [weak self] _ in
+            MainActor.assumeIsolated {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { self?.read(bundleID: bundleID) }
+            }
+        }
+    }
+
     /// Brings the browser forward with the YouTube Music tab selected.
     func reveal(bundleID: String) {
         // Each browser names this differently, and AppleScript compiles against the app's own dictionary.

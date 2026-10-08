@@ -115,16 +115,8 @@ struct MusicCard: View {
             VStack(alignment: .leading, spacing: 0) {
                 Divider().overlay(Theme.hairline).padding(.bottom, 12)
                 Text("Up next").font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.tertiary).padding(.bottom, 4)
-                ForEach(Array(s.upNext.prefix(4).enumerated()), id: \.offset) { i, t in
-                    HStack(spacing: 10) {
-                        Text("\(i + 1)").font(.system(size: 11.5, design: .rounded)).foregroundStyle(Theme.tertiary).frame(width: 14)
-                        Text(t.title).font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.primary).lineLimit(1)
-                        Text(t.artist).font(.system(size: 12.5)).foregroundStyle(Theme.tertiary).lineLimit(1)
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 6)
-                    .hoverRow(radius: 8)
+                ForEach(Array(s.upNext.prefix(5).enumerated()), id: \.offset) { i, t in
+                    UpNextRow(index: i, track: t) { music.play(upNextIndex: i) }
                 }
             }
         }
@@ -144,6 +136,36 @@ struct MusicCard: View {
         guard t.isFinite else { return "0:00" }
         let s = Int(t)
         return String(format: "%d:%02d", s / 60, s % 60)
+    }
+}
+
+/// One upcoming track; click to play it now.
+struct UpNextRow: View {
+    let index: Int
+    let track: Track
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                ZStack {
+                    Text("\(index + 1)").opacity(hover ? 0 : 1)
+                    Image(systemName: "play.fill").font(.system(size: 9)).opacity(hover ? 1 : 0)
+                }
+                .font(.system(size: 11.5, design: .rounded)).foregroundStyle(Theme.tertiary).frame(width: 14)
+                Text(track.title).font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.primary).lineLimit(1)
+                Text(track.artist).font(.system(size: 12.5)).foregroundStyle(Theme.tertiary).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 6)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(hover ? Theme.fill : .clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .help("Play now")
     }
 }
 

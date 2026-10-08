@@ -53,10 +53,31 @@ final class NowPlaying {
         return min(s.duration, s.position + Date().timeIntervalSince(s.updatedAt))
     }
 
+    @ObservationIgnored private var queueTimer: Timer?
+
     func setVisible(_ v: Bool) {
         visible = v
         updateWebPolling()
-        if v { web.read(bundleID: state?.appBundleID) }
+        queueTimer?.invalidate()
+        queueTimer = nil
+        if v {
+            web.read(bundleID: state?.appBundleID)
+            bridge.send("refresh")
+            // Keep the queue current while you're looking at it (reorders, "Play Next", AutoPlay).
+            queueTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.bridge.send("refresh") }
+            }
+        }
+    }
+
+    /// Jump to an upcoming track (index into `upNext`).
+    func play(upNextIndex i: Int) {
+        guard let s = state else { return }
+        if bridgeQueue.isEmpty, WebQueueReader.isBrowser(s.appBundleID) {
+            web.playQueueItem(bundleID: s.appBundleID, offset: i + 1)
+        } else {
+            bridge.send("skip \(i + 1)")
+        }
     }
 
     // MARK: Controls (sent through the system, so they work for any player)

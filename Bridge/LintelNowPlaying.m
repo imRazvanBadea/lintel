@@ -144,7 +144,13 @@ void lintel_np_run(void *perl, void *cv) {
                 if ([cmd isEqualToString:@"toggle"]) sendCommand(2, nil);
                 else if ([cmd isEqualToString:@"next"]) sendCommand(4, nil);
                 else if ([cmd isEqualToString:@"prev"]) sendCommand(5, nil);
-                else if ([cmd isEqualToString:@"refresh"]) { lastArtworkKey = nil; refresh(); }
+                else if ([cmd isEqualToString:@"refresh"]) refresh();
+                else if ([cmd isEqualToString:@"artwork"]) { lastArtworkKey = nil; refresh(); }
+                else if ([cmd hasPrefix:@"skip "]) {
+                    // Jump to the Nth upcoming track by skipping forward (works for any player).
+                    int n = MAX(1, MIN(20, [[cmd substringFromIndex:5] intValue]));
+                    for (int i = 0; i < n; i++) { sendCommand(4, nil); usleep(180 * 1000); }
+                }
                 scheduleRefresh();
             }
         });

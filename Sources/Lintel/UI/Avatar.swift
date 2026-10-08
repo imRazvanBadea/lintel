@@ -2,35 +2,49 @@ import SwiftUI
 import AppKit
 import QuartzCore
 
-/// A session's badge: a coloured circle with the first letter of its project,
-/// ringed by a spinner while it works.
+/// A session's badge: a softly graded circle with the first letter of its project.
+/// While the agent works, a spinning border orbits it (drawn as an overlay, so it never changes the size).
 struct Avatar: View {
     let session: AgentSession
     var size: CGFloat = 28
     var showsActivity = true
 
+    private var ring: CGFloat { size + max(7, size * 0.3) }
+
     var body: some View {
-        ZStack {
-            Circle().fill(session.tint)
-            Text(session.initial)
-                .font(.system(size: size * 0.46, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
-            if showsActivity {
-                switch session.status {
-                case .working:
-                    RingSpinner(color: NSColor(session.tint), lineWidth: max(1.5, size * 0.07))
-                        .frame(width: size + size * 0.36, height: size + size * 0.36)
-                case .waiting:
-                    Circle().strokeBorder(Theme.amber, lineWidth: max(1.5, size * 0.07))
-                        .frame(width: size + size * 0.36, height: size + size * 0.36)
-                default:
-                    EmptyView()
+        Circle()
+            .fill(LinearGradient(colors: [session.tint.lighter, session.tint, session.tint.darker],
+                                 startPoint: .topLeading, endPoint: .bottomTrailing))
+            .overlay(Circle().strokeBorder(Color.white.opacity(0.18), lineWidth: 0.75))
+            .overlay(
+                Text(session.initial)
+                    .font(.system(size: size * 0.44, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.15), radius: 1, y: 0.5)
+            )
+            .frame(width: size, height: size)
+            .opacity(session.status == .finished ? 0.7 : (session.status == .idle ? 0.5 : 1))
+            .overlay {
+                if showsActivity {
+                    switch session.status {
+                    case .working:
+                        RingSpinner(color: NSColor(session.tint), lineWidth: max(1.5, size * 0.06), progress: 0.3)
+                            .frame(width: ring, height: ring)
+                            .allowsHitTesting(false)
+                    case .waiting:
+                        Circle().strokeBorder(Theme.amber, lineWidth: max(1.5, size * 0.06))
+                            .frame(width: ring, height: ring)
+                    default:
+                        EmptyView()
+                    }
                 }
             }
-        }
-        .frame(width: size, height: size)
-        .opacity(session.status == .idle ? 0.55 : 1)
     }
+}
+
+extension Color {
+    var lighter: Color { Color(nsColor: NSColor(self).blended(withFraction: 0.28, of: .white) ?? NSColor(self)) }
+    var darker: Color { Color(nsColor: NSColor(self).blended(withFraction: 0.22, of: .black) ?? NSColor(self)) }
 }
 
 extension AgentSession {
