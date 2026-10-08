@@ -1,8 +1,14 @@
 import Foundation
 import Observation
 
-enum AgentKind: String { case claude, codex
-    var label: String { self == .claude ? "Claude" : "Codex" }
+enum AgentKind: String { case claude, codex, cursor
+    var label: String {
+        switch self {
+        case .claude: "Claude"
+        case .codex: "Codex"
+        case .cursor: "Cursor"
+        }
+    }
 }
 
 enum AgentStatus: Int, Comparable {
@@ -33,11 +39,11 @@ enum Phase: Int, CaseIterable {
 
     static func forTool(_ name: String, detail: String) -> Phase {
         switch name {
-        case "Read", "Grep", "Glob", "LS", "WebSearch", "WebFetch", "ToolSearch", "Agent", "Task":
+        case "Read", "Grep", "Glob", "LS", "List", "WebSearch", "WebFetch", "Fetch", "ToolSearch", "Agent", "Task", "ReadLints":
             return .researching
-        case "Edit", "MultiEdit", "Write", "NotebookEdit", "apply_patch":
+        case "Edit", "MultiEdit", "Write", "Delete", "NotebookEdit", "apply_patch":
             return .writing
-        case "Bash", "shell", "exec_command", "local_shell":
+        case "Bash", "Shell", "shell", "exec_command", "local_shell":
             let d = detail.lowercased()
             let checks = ["test", "vitest", "jest", "pytest", "lint", "tsc", "build", "check", "git diff", "git status", "cargo", "swift build", "xcodebuild"]
             if checks.contains(where: d.contains) { return .reviewing }
@@ -86,6 +92,10 @@ final class PendingRequest: Identifiable {
     /// Original tool input (echoed back with answers) and Claude's "always allow" suggestions.
     var toolInput: [String: Any] = [:]
     var suggestions: [Any] = []
+    /// Which agent asked (answers are formatted per agent).
+    var agent: AgentKind = .claude
+    /// What to send when you don't decide here (time-out / "answer in the agent's own UI").
+    var deferPayload = ""
     /// True while you're typing a reply, so the quick-reply window doesn't close under you.
     var hold = false
     /// Resolves the request with the hook's stdout payload ("" = defer to terminal).
@@ -139,7 +149,12 @@ final class AgentSession: Identifiable {
 
     var project: String { cwd.isEmpty ? kind.label : (cwd as NSString).lastPathComponent }
 
+    /// The title the tool itself generated (Claude app, Cursor, Codex). Preferred over everything else.
+    var generatedTitle: String?
+    @ObservationIgnored var lastTitleLookup = Date.distantPast
+
     var displayTitle: String {
+        if let g = generatedTitle, !g.isEmpty { return g }
         if !title.isEmpty { return title }
         if !lastPrompt.isEmpty { return lastPrompt }
         return project
@@ -176,6 +191,10 @@ final class AgentSession: Identifiable {
         if let p = prompt?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty {
             lastPrompt = String(p.split(separator: "\n").first ?? "").prefix(80).description
         }
+    }
+
+    func beginTurnIfIdle() {
+        if status != .working { beginTurn(prompt: nil) }
     }
 
     func endTurn(message: String?) {

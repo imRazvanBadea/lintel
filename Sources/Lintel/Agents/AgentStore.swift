@@ -21,8 +21,12 @@ final class AgentStore {
     var working: [AgentSession] { sessions.filter { $0.status == .working } }
 
     func start() {
-        if ClaudeHooks.isInstalled { try? ClaudeHooks.writeScript() } // keep the bridge script current
-        let token = ClaudeHooks.token()
+        // Keep the bridge script (and hook entries from older versions) current.
+        for t in AgentHooks.Target.allCases {
+            if let s = try? String(contentsOf: t.configURL, encoding: .utf8), s.contains(AgentHooks.marker) { try? AgentHooks.install(t) }
+        }
+        try? FileManager.default.removeItem(at: AgentHooks.dir.appendingPathComponent("claude-hook.sh")) // pre-1.1 script
+        let token = AgentHooks.token()
         server = HookServer(token: token) { [weak self] req, responder in
             MainActor.assumeIsolated { self?.handle(req, responder) }
         }
@@ -90,7 +94,7 @@ final class AgentStore {
 
     func resolve(_ p: PendingRequest, with payload: String) {
         guard pending.contains(where: { $0.id == p.id }) else { return }
-        p.resolve(payload)
+        p.resolve(payload.isEmpty ? p.deferPayload : payload)
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { pending.removeAll { $0.id == p.id } }
         if let s = existing(p.sessionID), s.status == .waiting, !pending.contains(where: { $0.sessionID == s.id && $0.isBlocking }) {
             s.status = .working
@@ -120,6 +124,10 @@ final class AgentStore {
             }
             return
         }
+        if s.kind == .cursor {
+            if let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.todesktop.230313mzl4w4u92").first { app.activate() }
+            return
+        }
         if let pid = s.agentPID ?? s.hookPPID, let app = Proc.hostingApp(of: pid) {
             app.activate()
             return
@@ -140,6 +148,7 @@ final class AgentStore {
     private func handle(_ req: HookServer.Request, _ responder: HookServer.Responder) {
         let parts = req.path.split(separator: "/")
         if parts.count == 2, parts[0] == "debug" { debugHandler?(String(parts[1]), responder); return }
+        if parts.count == 2, parts[0] == "cursor" { handleCursor(String(parts[1]), req, responder); return }
         guard parts.count == 2, parts[0] == "claude" else { responder.respond(""); return }
         guard let json = (try? JSONSerialization.jsonObject(with: req.body)) as? [String: Any],
               let sid = json["session_id"] as? String else { responder.respond(""); return }
@@ -151,9 +160,19 @@ final class AgentStore {
             return
         }
 
-        let s = session(id: sid, kind: .claude)
+        // Cursor's agent also runs hooks from ~/.claude/settings.json. Recognise it by the process tree.
+        let ppid = req.headers["x-lintel-ppid"].flatMap { pid_t($0) }
+        let kind = json["cursor_version"] != nil ? .cursor : originKind(sid: sid, ppid: ppid)
+        if kind == .cursor && AgentHooks.isInstalled(.cursor) {
+            responder.respond("") // Cursor's own hooks already report this conversation
+            return
+        }
+
+        let s = session(id: sid, kind: kind)
         s.lastEventAt = Date()
-        if let cwd = json["cwd"] as? String, cwd != s.cwd { s.cwd = cwd; s.refreshBranch() }
+        // Cursor reports the workspace in workspace_roots; its cwd can be an internal directory.
+        let cwd = (json["workspace_roots"] as? [String])?.first ?? json["cwd"] as? String
+        if let cwd, !cwd.isEmpty, cwd != s.cwd { s.cwd = cwd; s.refreshBranch() }
         if let t = json["transcript_path"] as? String { s.transcriptPath = t }
         if let term = req.headers["x-lintel-term"], !term.isEmpty { s.termProgram = term }
         if let pp = req.headers["x-lintel-ppid"].flatMap({ pid_t($0) }) {
@@ -161,11 +180,13 @@ final class AgentStore {
             if s.agentPID == nil { s.agentPID = Proc.agentProcess(from: pp) }
         }
         if let m = json["model"] as? String, !m.isEmpty { s.model = shortModelName(m) }
+        if s.generatedTitle == nil { refreshTitle(s) } // throttled; covers sessions that began before Lintel did
 
         switch event {
         case "SessionStart":
             if s.status != .working { s.status = .idle }
             readTranscript(s)
+            refreshTitle(s)
             responder.respond("")
 
         case "UserPromptSubmit":
@@ -173,6 +194,7 @@ final class AgentStore {
             for p in pendingFor(s) { if case .reply = p.kind { resolve(p, with: "") } }
             s.beginTurn(prompt: json["prompt"] as? String)
             if s.title.isEmpty { readTranscript(s) }
+            refreshTitle(s)
             responder.respond("")
 
         case "PreToolUse":
@@ -214,12 +236,14 @@ final class AgentStore {
             for p in pendingFor(s) where p.isBlocking { if case .external = p.kind { discard(p) } }
             s.endTurn(message: json["last_assistant_message"] as? String)
             readTranscript(s)
+            refreshTitle(s, force: true)
             let secs = Settings.shared.quickReplySeconds
             let blockedByStopHook = (json["stop_hook_active"] as? Bool) == true
             if secs > 0 && !blockedByStopHook {
                 let p = PendingRequest(sessionID: sid, kind: .reply(deadline: Date().addingTimeInterval(Double(secs)))) { payload in
                     responder.respond(payload)
                 }
+                p.agent = s.kind
                 responder.onClose = { [weak self] in MainActor.assumeIsolated { self?.discard(p) } }
                 add(p)
                 scheduleReplyTimeout(p, after: Double(secs))
@@ -230,6 +254,102 @@ final class AgentStore {
 
         default:
             responder.respond("")
+        }
+    }
+
+
+    // MARK: Cursor hook events
+
+    private func handleCursor(_ event: String, _ req: HookServer.Request, _ responder: HookServer.Responder) {
+        guard let json = (try? JSONSerialization.jsonObject(with: req.body)) as? [String: Any],
+              let sid = (json["conversation_id"] as? String) ?? (json["session_id"] as? String) else { responder.respond("{}"); return }
+
+        if event == "sessionEnd" {
+            remove(sid)
+            responder.respond("{}")
+            return
+        }
+
+        let s = session(id: sid, kind: .cursor)
+        s.lastEventAt = Date()
+        let cwd = (json["cwd"] as? String) ?? (json["workspace_roots"] as? [String])?.first ?? (json["workspace_paths"] as? [String])?.first
+        if let cwd, !cwd.isEmpty, cwd != s.cwd { s.cwd = cwd; s.refreshBranch() }
+        if let pp = req.headers["x-lintel-ppid"].flatMap({ pid_t($0) }) { s.hookPPID = pp }
+        if let m = (json["model"] as? String) ?? (json["model_id"] as? String), !m.isEmpty { s.model = shortModelName(m) }
+        if s.generatedTitle == nil { refreshTitle(s) }
+
+        switch event {
+        case "sessionStart":
+            if s.status != .working { s.status = .idle }
+            responder.respond("{}")
+
+        case "beforeSubmitPrompt":
+            for p in pendingFor(s) { if case .reply = p.kind { resolve(p, with: "") } }
+            s.beginTurn(prompt: json["prompt"] as? String)
+            if s.title.isEmpty, let p = json["prompt"] as? String {
+                s.title = String(p.split(separator: "\n").first ?? "").prefix(60).description
+            }
+            refreshTitle(s)
+            responder.respond("{}")
+
+        case "preToolUse":
+            if s.turnStartedAt == nil || s.status != .working { s.beginTurnIfIdle() }
+            let tool = json["tool_name"] as? String ?? "Tool"
+            let input = json["tool_input"] as? [String: Any] ?? [:]
+            s.recordTool(tool, detail: Self.detail(tool: tool, input: input))
+            responder.respond("{}")
+
+        case "afterAgentThought":
+            s.status = .working
+            s.phase = .reasoning
+            responder.respond("{}")
+
+        case "afterAgentResponse":
+            if let t = json["text"] as? String, !t.isEmpty { s.lastMessage = t }
+            refreshTitle(s)
+            let keys = ["input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"]
+            let n = keys.reduce(0) { $0 + ((json[$1] as? NSNumber)?.intValue ?? 0) }
+            if n > 0 { s.tokens = n }
+            responder.respond("{}")
+
+        case "beforeShellExecution":
+            guard Settings.shared.cursorShellApprovals else { responder.respond("{}"); return }
+            let command = json["command"] as? String ?? ""
+            let p = PendingRequest(sessionID: sid, kind: .permission(tool: "Shell", detail: command, description: "", canAlwaysAllow: false)) { payload in
+                responder.respond(payload)
+            }
+            p.agent = .cursor
+            p.deferPayload = #"{"permission":"ask"}"#
+            responder.onClose = { [weak self] in MainActor.assumeIsolated { self?.discard(p) } }
+            s.status = .waiting
+            add(p)
+            let timeout = Settings.shared.permissionTimeout
+            if timeout > 0 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(timeout)) { [weak self] in self?.resolve(p, with: "") }
+            }
+
+        case "stop":
+            let status = json["status"] as? String ?? "completed"
+            s.endTurn(message: nil)
+            refreshTitle(s, force: true)
+            if status != "completed" { s.status = .idle }
+            let secs = Settings.shared.quickReplySeconds
+            if secs > 0 && status == "completed" {
+                let p = PendingRequest(sessionID: sid, kind: .reply(deadline: Date().addingTimeInterval(Double(secs)))) { payload in
+                    responder.respond(payload)
+                }
+                p.agent = .cursor
+                p.deferPayload = "{}"
+                responder.onClose = { [weak self] in MainActor.assumeIsolated { self?.discard(p) } }
+                add(p)
+                scheduleReplyTimeout(p, after: Double(secs))
+            } else {
+                responder.respond("{}")
+            }
+            if status == "completed" { announceFinished(s) }
+
+        default:
+            responder.respond("{}")
         }
     }
 
@@ -284,6 +404,7 @@ final class AgentStore {
         let p = PendingRequest(sessionID: s.id, kind: kind) { payload in
             responder.respond(payload)
         }
+        p.agent = s.kind
         p.toolInput = input
         p.suggestions = suggestions
         responder.onClose = { [weak self] in MainActor.assumeIsolated { self?.discard(p) } }
@@ -301,12 +422,14 @@ final class AgentStore {
     // MARK: Answers
 
     func allow(_ p: PendingRequest, always: Bool = false) {
+        if p.agent == .cursor { resolve(p, with: #"{"permission":"allow"}"#); return }
         var decision: [String: Any] = ["behavior": "allow"]
         if always, !p.suggestions.isEmpty { decision["updatedPermissions"] = p.suggestions }
         resolve(p, with: Self.permissionPayload(decision))
     }
 
     func deny(_ p: PendingRequest) {
+        if p.agent == .cursor { resolve(p, with: Self.json(["permission": "deny", "user_message": "Denied from Lintel."])); return }
         resolve(p, with: Self.permissionPayload(["behavior": "deny", "message": "Denied from Lintel."]))
     }
 
@@ -316,13 +439,18 @@ final class AgentStore {
         resolve(p, with: Self.permissionPayload(["behavior": "allow", "updatedInput": input]))
     }
 
+    /// Continue a finished turn with a follow-up message.
     func reply(_ p: PendingRequest, text: String) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
-        let payload = (try? JSONSerialization.data(withJSONObject: ["decision": "block", "reason": t]))
-            .flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        let payload = p.agent == .cursor ? Self.json(["followup_message": t])
+                                         : Self.json(["decision": "block", "reason": t])
         if let s = existing(p.sessionID) { s.beginTurn(prompt: t) }
         resolve(p, with: payload)
+    }
+
+    private static func json(_ obj: [String: Any]) -> String {
+        (try? JSONSerialization.data(withJSONObject: obj)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
     }
 
     /// Answer in the terminal instead.
@@ -337,6 +465,33 @@ final class AgentStore {
     }
 
     // MARK: Helpers
+
+    @ObservationIgnored private var origins: [String: AgentKind] = [:]
+    private static let cursorBundleID = "com.todesktop.230313mzl4w4u92"
+
+    private func originKind(sid: String, ppid: pid_t?) -> AgentKind {
+        if let k = origins[sid] { return k }
+        var kind = AgentKind.claude
+        if let pp = ppid, Proc.claudeProcess(from: pp) == nil,
+           Proc.hostingApp(of: pp)?.bundleIdentifier == Self.cursorBundleID {
+            kind = .cursor
+        }
+        origins[sid] = kind
+        return kind
+    }
+
+    /// Picks up the title the tool generated for this conversation (throttled).
+    func refreshTitle(_ s: AgentSession, force: Bool = false) {
+        guard force || s.generatedTitle == nil, Date().timeIntervalSince(s.lastTitleLookup) > (force ? 2 : 8) else { return }
+        s.lastTitleLookup = Date()
+        let id = s.id
+        TitleResolver.shared.title(for: id, kind: s.kind) { title in
+            guard let title else { return }
+            DispatchQueue.main.async {
+                AgentStore.shared.existing(id)?.generatedTitle = title
+            }
+        }
+    }
 
     static func detail(tool: String, input: [String: Any]) -> String {
         for key in ["command", "file_path", "notebook_path", "url", "pattern", "query", "path", "prompt", "description"] {

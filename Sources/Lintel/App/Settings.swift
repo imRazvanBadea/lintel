@@ -1,17 +1,23 @@
-import Foundation
+import AppKit
 import Observation
 import ServiceManagement
 
 enum DisplayChoice: String, CaseIterable, Identifiable {
-    case auto, builtIn, main
+    case follow, main, builtIn
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .auto: "Automatic (notch if available)"
-        case .builtIn: "Built-in display"
-        case .main: "Main display"
+        case .follow: "Follow the display I'm using"
+        case .main: "Main display only"
+        case .builtIn: "Built-in display only"
         }
     }
+}
+
+enum AppearanceChoice: String, CaseIterable, Identifiable {
+    case system, light, dark
+    var id: String { rawValue }
+    var label: String { rawValue.capitalized }
 }
 
 /// User preferences, persisted in UserDefaults.
@@ -20,7 +26,8 @@ final class Settings {
     static let shared = Settings()
     private let d = UserDefaults.standard
 
-    var display: DisplayChoice { didSet { d.set(display.rawValue, forKey: "display"); onDisplayChange?() } }
+    var appearance: AppearanceChoice { didSet { d.set(appearance.rawValue, forKey: "appearance"); onAppearanceChange?() } }
+    var display: DisplayChoice { didSet { d.set(display.rawValue, forKey: "display2"); onDisplayChange?() } }
     /// Seconds the "Finished" card keeps the Claude turn open so you can send a follow-up. 0 disables.
     var quickReplySeconds: Int { didSet { d.set(quickReplySeconds, forKey: "quickReplySeconds") } }
     /// Seconds to wait for a decision in the notch before handing the prompt back to the terminal.
@@ -28,9 +35,9 @@ final class Settings {
     var autoExpandOnAttention: Bool { didSet { d.set(autoExpandOnAttention, forKey: "autoExpand") } }
     var playSounds: Bool { didSet { d.set(playSounds, forKey: "playSounds") } }
     var codexEnabled: Bool { didSet { d.set(codexEnabled, forKey: "codexEnabled"); onCodexChange?() } }
-    var appleMusicEnabled: Bool { didSet { d.set(appleMusicEnabled, forKey: "appleMusic") } }
-    var youTubeMusicEnabled: Bool { didSet { d.set(youTubeMusicEnabled, forKey: "youTubeMusic") } }
-    var hideMusicWhenIdle: Bool { didSet { d.set(hideMusicWhenIdle, forKey: "hideMusicWhenIdle") } }
+    /// Hold Cursor's shell commands until you approve them in the notch (Cursor's own allowlist still applies after).
+    var cursorShellApprovals: Bool { didSet { d.set(cursorShellApprovals, forKey: "cursorShellApprovals") } }
+    var musicEnabled: Bool { didSet { d.set(musicEnabled, forKey: "musicEnabled") } }
     var showUpNext: Bool { didSet { d.set(showUpNext, forKey: "showUpNext") } }
 
     var launchAtLogin: Bool {
@@ -43,30 +50,39 @@ final class Settings {
     }
 
     @ObservationIgnored var onDisplayChange: (() -> Void)?
+    @ObservationIgnored var onAppearanceChange: (() -> Void)?
+
+    var nsAppearance: NSAppearance? {
+        switch appearance {
+        case .system: nil
+        case .light: NSAppearance(named: .aqua)
+        case .dark: NSAppearance(named: .darkAqua)
+        }
+    }
     @ObservationIgnored var onCodexChange: (() -> Void)?
 
     private init() {
         d.register(defaults: [
-            "display": DisplayChoice.auto.rawValue,
+            "display2": DisplayChoice.follow.rawValue,
+            "appearance": AppearanceChoice.system.rawValue,
             "quickReplySeconds": 25,
             "permissionTimeout": 600,
             "autoExpand": true,
             "playSounds": true,
             "codexEnabled": true,
-            "appleMusic": true,
-            "youTubeMusic": true,
-            "hideMusicWhenIdle": false,
+            "musicEnabled": true,
+            "cursorShellApprovals": false,
             "showUpNext": true,
         ])
-        display = DisplayChoice(rawValue: d.string(forKey: "display") ?? "") ?? .auto
+        appearance = AppearanceChoice(rawValue: d.string(forKey: "appearance") ?? "") ?? .system
+        display = DisplayChoice(rawValue: d.string(forKey: "display2") ?? "") ?? .follow
         quickReplySeconds = d.integer(forKey: "quickReplySeconds")
         permissionTimeout = d.integer(forKey: "permissionTimeout")
         autoExpandOnAttention = d.bool(forKey: "autoExpand")
         playSounds = d.bool(forKey: "playSounds")
         codexEnabled = d.bool(forKey: "codexEnabled")
-        appleMusicEnabled = d.bool(forKey: "appleMusic")
-        youTubeMusicEnabled = d.bool(forKey: "youTubeMusic")
-        hideMusicWhenIdle = d.bool(forKey: "hideMusicWhenIdle")
+        musicEnabled = d.bool(forKey: "musicEnabled")
+        cursorShellApprovals = d.bool(forKey: "cursorShellApprovals")
         showUpNext = d.bool(forKey: "showUpNext")
     }
 }

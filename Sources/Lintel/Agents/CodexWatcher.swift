@@ -107,7 +107,7 @@ final class CodexWatcher {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.titles = t
-                for s in self.store?.sessions ?? [] where s.kind == .codex { if let n = t[s.id] { s.title = n } }
+                for s in self.store?.sessions ?? [] where s.kind == .codex { if let n = t[s.id] { s.generatedTitle = n } }
             }
         }
     }
@@ -165,7 +165,7 @@ final class CodexWatcher {
                 fileSession[file] = id
                 let s = store.session(id: id, kind: .codex)
                 if let cwd = p["cwd"] as? String, cwd != s.cwd { s.cwd = cwd; s.refreshBranch() }
-                if let n = titles[id] { s.title = n }
+                if let n = titles[id] { s.generatedTitle = n }
                 session = s
                 continue
             }

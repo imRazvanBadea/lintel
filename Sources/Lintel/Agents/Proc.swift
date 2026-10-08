@@ -30,6 +30,17 @@ enum Proc {
         return nil
     }
 
+    /// The Claude Code CLI process above a hook, if any (Cursor's agent runs Claude-style hooks too, without one).
+    static func claudeProcess(from pid: pid_t) -> pid_t? {
+        var p = pid
+        for _ in 0..<6 {
+            guard p > 1, let i = info(p) else { return nil }
+            if i.name.lowercased().contains("claude") { return p }
+            p = i.ppid
+        }
+        return nil
+    }
+
     /// The GUI app (terminal, editor, Claude desktop…) hosting a process.
     static func hostingApp(of pid: pid_t) -> NSRunningApplication? {
         var p = pid

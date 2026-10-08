@@ -13,12 +13,18 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Lintel"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 
+# Now Playing bridge (loaded by /usr/bin/perl, see Bridge/LintelNowPlaying.m)
+clang -dynamiclib -O2 -fobjc-arc -arch arm64 -framework AppKit Bridge/LintelNowPlaying.m \
+  -o "$APP/Contents/Resources/libLintelNowPlaying.dylib"
+cp "$APP/Contents/Resources/libLintelNowPlaying.dylib" build/libLintelNowPlaying.dylib
+
 if [ ! -f build/AppIcon.icns ]; then
   swift scripts/make-icon.swift build/AppIcon.iconset
   iconutil -c icns build/AppIcon.iconset -o build/AppIcon.icns
 fi
 cp build/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
+codesign --force --sign - "$APP/Contents/Resources/libLintelNowPlaying.dylib"
 codesign --force --sign - --identifier com.razvanbadea.lintel "$APP"
 echo "Built $APP ($(du -sh "$APP" | cut -f1))"
 

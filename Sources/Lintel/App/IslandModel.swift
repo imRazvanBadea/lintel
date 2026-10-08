@@ -77,6 +77,7 @@ final class IslandModel {
 
 extension Notification.Name {
     static let lintelCollapsed = Notification.Name("LintelCollapsed")
+    static let lintelAppearanceChanged = Notification.Name("LintelAppearanceChanged")
 }
 
 import SwiftUI

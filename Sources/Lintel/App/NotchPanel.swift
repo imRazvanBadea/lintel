@@ -54,6 +54,11 @@ final class NotchController {
             MainActor.assumeIsolated { self?.reposition() }
         }
         Settings.shared.onDisplayChange = { [weak self] in self?.reposition() }
+        panel.appearance = Settings.shared.nsAppearance
+        Settings.shared.onAppearanceChange = { [weak self] in
+            self?.panel.appearance = Settings.shared.nsAppearance
+            NotificationCenter.default.post(name: .lintelAppearanceChanged, object: nil)
+        }
         NotificationCenter.default.addObserver(forName: .lintelCollapsed, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.releaseKeyFocus() }
         }
@@ -77,7 +82,7 @@ final class NotchController {
         let bounds = view.bounds
         guard let rep = view.bitmapImageRepForCachingDisplay(in: bounds) else { return }
         view.cacheDisplay(in: bounds, to: rep)
-        // Put it on a light background so the dark islands are visible.
+        // Put it on a desktop-like background so the islands are visible.
         let out = NSImage(size: bounds.size)
         out.lockFocus()
         NSColor(white: 0.93, alpha: 1).setFill()
@@ -91,19 +96,40 @@ final class NotchController {
 
     // MARK: Placement
 
+    /// The display chosen by "follow": starts on the main display, then moves to whichever display you click on.
+    private var followedScreenID: CGDirectDisplayID?
+    private var currentScreenID: CGDirectDisplayID?
+
+    private static func id(of screen: NSScreen) -> CGDirectDisplayID? {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+    }
+
     func targetScreen() -> NSScreen? {
         let screens = NSScreen.screens
-        let builtIn = screens.first { $0.safeAreaInsets.top > 0 }
-            ?? screens.first { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber).map { CGDisplayIsBuiltin($0.uint32Value) != 0 } ?? false }
+        let main = screens.first // the display with the menu bar ("main display" in System Settings)
         switch Settings.shared.display {
-        case .auto: return builtIn ?? NSScreen.main ?? screens.first
-        case .builtIn: return builtIn ?? NSScreen.main
-        case .main: return screens.first
+        case .main: return main
+        case .builtIn:
+            return screens.first { Self.id(of: $0).map { CGDisplayIsBuiltin($0) != 0 } ?? false } ?? main
+        case .follow:
+            if let id = followedScreenID, let s = screens.first(where: { Self.id(of: $0) == id }) { return s }
+            return main
         }
+    }
+
+    /// Called on every click anywhere: if it landed on another display, move there.
+    private func followClick(at p: NSPoint) {
+        guard Settings.shared.display == .follow,
+              let screen = NSScreen.screens.first(where: { NSMouseInRect(p, $0.frame, false) }),
+              let id = Self.id(of: screen), id != currentScreenID else { return }
+        followedScreenID = id
+        if model.expanded != nil && !AgentStore.shared.hasPendingRequests { model.collapse() }
+        reposition()
     }
 
     func reposition() {
         guard let screen = targetScreen() else { return }
+        currentScreenID = Self.id(of: screen)
         let f = screen.frame
         let size = CGSize(width: min(Self.panelSize.width, f.width), height: Self.panelSize.height)
         panel.setFrame(NSRect(x: f.midX - size.width / 2, y: f.maxY - size.height, width: size.width, height: size.height),
@@ -147,6 +173,7 @@ final class NotchController {
             lastInside = inside
         }
 
+        if event.type == .leftMouseDown && !inside { followClick(at: p) }
         if event.type == .leftMouseDown && !inside {
             // Clicking anywhere else dismisses an open card (unless something is waiting on you).
             if model.expanded != nil && !AgentStore.shared.hasPendingRequests { model.collapse() }

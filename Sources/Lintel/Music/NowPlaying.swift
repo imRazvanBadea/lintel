@@ -1,11 +1,6 @@
 import AppKit
 import Observation
 
-enum MusicSource: String {
-    case appleMusic, youTubeMusic
-    var label: String { self == .appleMusic ? "Apple Music" : "YouTube Music" }
-}
-
 struct Track: Equatable {
     var title: String
     var artist: String
@@ -18,37 +13,38 @@ struct PlayerState: Equatable {
     var position: Double
     var duration: Double
     var upNext: [Track]
-    var shuffle: Bool = false
-    var artworkKey: String = ""   // identifies the artwork so we only reload on change
-    var artworkURL: String = ""
+    var appBundleID: String
     var updatedAt = Date()
 }
 
-/// Merges the sources and exposes what's playing (and what's next).
+/// What's playing anywhere on the Mac (Music, Spotify, any browser tab…), via the system
+/// Now Playing service. Up next comes from the app's real playback queue, or — for YouTube Music,
+/// which doesn't publish one — from the page itself.
 @MainActor @Observable
 final class NowPlaying {
     static let shared = NowPlaying()
 
-    private(set) var source: MusicSource?
     private(set) var state: PlayerState?
     private(set) var artwork: NSImage?
-    private(set) var tint: NSColor = .white
-    /// Setup hint, e.g. when the browser blocks JavaScript from Apple Events.
+    private(set) var tint: NSColor = .systemGray
+    private(set) var appName = ""
+    /// e.g. "YouTube Music" when we recognise the page; otherwise the app name.
+    private(set) var sourceLabel = ""
+    /// Setup hint, e.g. when a browser blocks JavaScript from Apple Events.
     private(set) var hint: String?
 
-    @ObservationIgnored private var states: [MusicSource: PlayerState] = [:]
-    @ObservationIgnored private var lastPlaying: [MusicSource: Date] = [:]
-    @ObservationIgnored private var artworkCache: [String: NSImage] = [:]
-    @ObservationIgnored private var hints: [MusicSource: String] = [:]
-    @ObservationIgnored private let apple = AppleMusicSource()
-    @ObservationIgnored private let youtube = YouTubeMusicSource()
+    @ObservationIgnored private let bridge = NowPlayingBridge()
+    @ObservationIgnored private let web = WebQueueReader()
+    @ObservationIgnored private var bridgeQueue: [Track] = []
+    @ObservationIgnored private var webQueue: [Track] = []
+    @ObservationIgnored private var artworkKey = ""
+    @ObservationIgnored private var visible = false
+    @ObservationIgnored private var webTimer: Timer?
 
     func start() {
-        apple.onUpdate = { [weak self] s in self?.update(.appleMusic, s) }
-        youtube.onUpdate = { [weak self] s in self?.update(.youTubeMusic, s) }
-        youtube.onHint = { [weak self] h in self?.hints[.youTubeMusic] = h; self?.recompute() }
-        apple.start()
-        youtube.start()
+        bridge.onState = { [weak self] s in self?.apply(s) }
+        bridge.start()
+        web.onResult = { [weak self] r in self?.applyWeb(r) }
     }
 
     var currentPosition: Double {
@@ -57,102 +53,114 @@ final class NowPlaying {
         return min(s.duration, s.position + Date().timeIntervalSince(s.updatedAt))
     }
 
-    /// Faster refresh while the music card is open (progress + queue).
-    func setVisible(_ visible: Bool) {
-        youtube.setFast(visible)
-        if visible { apple.refresh(full: true) }
+    func setVisible(_ v: Bool) {
+        visible = v
+        updateWebPolling()
+        if v { web.read(bundleID: state?.appBundleID) }
     }
 
-    // MARK: Controls
+    // MARK: Controls (sent through the system, so they work for any player)
 
-    func playPause() { controller?.playPause(); nudge(toggle: true) }
-    func next() { controller?.next() }
-    func previous() { controller?.previous() }
-
-    func openSource() {
-        switch source {
-        case .appleMusic: NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Music.app"))
-        case .youTubeMusic: youtube.reveal()
-        case nil: break
-        }
-    }
-
-    private var controller: MusicController? {
-        switch source {
-        case .appleMusic: apple
-        case .youTubeMusic: youtube
-        case nil: nil
-        }
-    }
-
-    /// Optimistic UI for play/pause; the source confirms shortly after.
-    private func nudge(toggle: Bool) {
-        guard var s = state, let src = source else { return }
+    func playPause() {
+        bridge.send("toggle")
+        guard var s = state else { return }
         s.position = currentPosition
         s.isPlaying.toggle()
         s.updatedAt = Date()
-        states[src] = s
         state = s
     }
+    func next() { bridge.send("next") }
+    func previous() { bridge.send("prev") }
 
-    // MARK: Merge
-
-    private func update(_ src: MusicSource, _ s: PlayerState?) {
-        let enabled = src == .appleMusic ? Settings.shared.appleMusicEnabled : Settings.shared.youTubeMusicEnabled
-        states[src] = enabled ? s : nil
-        if s?.isPlaying == true { lastPlaying[src] = Date() }
-        recompute()
+    func openSource() {
+        guard let id = state?.appBundleID, !id.isEmpty else { return }
+        if WebQueueReader.isBrowser(id) { web.reveal(bundleID: id) } else { Self.activate(bundleID: id) }
+        IslandModel.shared.collapse()
     }
 
-    private func recompute() {
-        // Prefer whatever is playing; otherwise whatever played most recently.
-        let playing = states.filter { $0.value.isPlaying }.map(\.key)
-        let pick: MusicSource? = playing.max { (lastPlaying[$0] ?? .distantPast) < (lastPlaying[$1] ?? .distantPast) }
-            ?? states.keys.max { (lastPlaying[$0] ?? .distantPast) < (lastPlaying[$1] ?? .distantPast) }
-        hint = hints[.youTubeMusic]
-        let newState = pick.flatMap { states[$0] }
-        if source != pick { source = pick }
-        if state != newState { state = newState }
-        loadArtwork()
+    /// Brings an app to the front (launching it if needed) — reliable even from a menu-bar app.
+    static func activate(bundleID: String) {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return }
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        NSWorkspace.shared.openApplication(at: url, configuration: config)
     }
 
-    private func loadArtwork() {
-        guard let src = source, let s = state, !s.artworkKey.isEmpty else {
-            if state == nil { artwork = nil }
+    // MARK: Updates
+
+    private func apply(_ s: NowPlayingBridge.Snapshot?) {
+        guard Settings.shared.musicEnabled, let s, !s.title.isEmpty else {
+            if state != nil { state = nil; artwork = nil }
+            updateWebPolling()
             return
         }
-        if let img = artworkCache[s.artworkKey] {
-            if artwork !== img { setArtwork(img) }
-            return
+        let trackChanged = state?.track.title != s.title || state?.appBundleID != s.bundleID
+        bridgeQueue = s.queue
+        if trackChanged { webQueue = [] }
+
+        var new = PlayerState(track: Track(title: s.title, artist: s.artist, album: s.album),
+                              isPlaying: s.playing, position: s.elapsed, duration: s.duration,
+                              upNext: [], appBundleID: s.bundleID, updatedAt: s.timestamp)
+        new.upNext = mergedQueue()
+        if new != state { state = new }
+
+        if s.bundleID != "", appName.isEmpty || trackChanged {
+            appName = Self.appName(for: s.bundleID)
+            if !WebQueueReader.isBrowser(s.bundleID) { sourceLabel = appName; hint = nil }
+            else if sourceLabel.isEmpty { sourceLabel = appName }
         }
-        let key = s.artworkKey
-        let done: (NSImage?) -> Void = { [weak self] img in
-            guard let self, let img else { return }
-            if self.artworkCache.count > 20 { self.artworkCache.removeAll() }
-            self.artworkCache[key] = img
-            if self.state?.artworkKey == key { self.setArtwork(img) }
+        if let data = s.artwork, s.artworkKey != artworkKey, let img = NSImage(data: data) {
+            artworkKey = s.artworkKey
+            artwork = img
+            tint = img.averageColor?.vivid ?? .systemGray
+        } else if s.artworkKey != artworkKey, s.artwork == nil, trackChanged {
+            // New track without artwork yet; ask the bridge to resend once it's available.
+            artwork = nil
         }
-        switch src {
-        case .appleMusic: apple.fetchArtwork(done)
-        case .youTubeMusic:
-            guard let url = URL(string: s.artworkURL) else { return }
-            URLSession.shared.dataTask(with: url) { data, _, _ in
-                let img = data.flatMap(NSImage.init(data:))
-                DispatchQueue.main.async { done(img) }
-            }.resume()
+        if trackChanged { web.read(bundleID: s.bundleID) }
+        updateWebPolling()
+    }
+
+    private func applyWeb(_ r: WebQueueReader.Result) {
+        switch r {
+        case .queue(let label, let tracks):
+            sourceLabel = "\(label) · \(appName)"
+            hint = nil
+            webQueue = tracks
+        case .blocked(let h):
+            hint = h
+            webQueue = []
+        case .none:
+            webQueue = []
+        }
+        if var s = state {
+            s.upNext = mergedQueue()
+            if s != state { state = s }
         }
     }
 
-    private func setArtwork(_ img: NSImage) {
-        artwork = img
-        tint = img.averageColor?.vivid ?? .white
-    }
-}
+    private func mergedQueue() -> [Track] { bridgeQueue.isEmpty ? webQueue : bridgeQueue }
 
-@MainActor protocol MusicController: AnyObject {
-    func playPause()
-    func next()
-    func previous()
+    /// While a browser is the player we re-read the page queue every few seconds (only then).
+    private func updateWebPolling() {
+        let needs = state.map { WebQueueReader.isBrowser($0.appBundleID) } ?? false
+        let interval: TimeInterval = visible ? 3 : 15
+        if !needs { webTimer?.invalidate(); webTimer = nil; return }
+        if let t = webTimer, t.timeInterval == interval { return }
+        webTimer?.invalidate()
+        webTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.web.read(bundleID: self?.state?.appBundleID) }
+        }
+        webTimer?.tolerance = interval * 0.3
+    }
+
+    static func appName(for bundleID: String) -> String {
+        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first, let n = app.localizedName { return n }
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            return FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "")
+        }
+        return bundleID
+    }
 }
 
 extension NSImage {
@@ -172,12 +180,12 @@ extension NSImage {
 }
 
 extension NSColor {
-    /// Lifts dull colours so they read on black.
+    /// A saturated, mid-brightness version of the colour that reads on white and on black.
     var vivid: NSColor {
         guard let c = usingColorSpace(.deviceRGB) else { return self }
         var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         c.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
-        if s < 0.12 { return NSColor(white: 0.92, alpha: 1) }
-        return NSColor(hue: h, saturation: min(1, max(s, 0.45)), brightness: max(b, 0.85), alpha: 1)
+        if s < 0.12 { return NSColor(white: 0.45, alpha: 1) }
+        return NSColor(hue: h, saturation: min(1, max(s, 0.55)), brightness: min(max(b, 0.6), 0.8), alpha: 1)
     }
 }
