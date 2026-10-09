@@ -352,7 +352,8 @@ final class UsageHistory {
                 let key = "\(slot.timeIntervalSince1970)|\(tool.rawValue)"
                 if series[key] == nil { series[key] = (slot, tool, 0, 0) }
             }
-            slot = slot.addingTimeInterval(range.step)
+            // Calendar steps, not fixed seconds: a day across a DST change is 23 or 25 hours.
+            slot = cal.date(byAdding: range == .day ? .hour : .day, value: 1, to: slot)!
         }
         s.points = series.values.map { Point(date: $0.0, tool: $0.1, tokens: $0.2, cost: $0.3) }.sorted { $0.date < $1.date }
         s.tools = perTool.values.sorted { $0.tokens > $1.tokens }

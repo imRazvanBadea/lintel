@@ -16,6 +16,10 @@ final class IslandModel {
     var showingList = false
     /// The usage dashboard is open in the agents card.
     var showingUsage = false
+    var usageRange: UsageHistory.Range = .week
+    var usageShowsCost = true
+    /// The chart bucket under the pointer in the usage dashboard.
+    var usageHover: Date?
     /// The pointer is over the notch bar (Minimal notch style shows the wings only then).
     var hoveringBar = false
     /// Wings pop out briefly for events (new song, finished turn) in Minimal style.
@@ -36,6 +40,8 @@ final class IslandModel {
     var menuBarHeight: CGFloat = 24
     var notchWidth: CGFloat = 0           // 0 when the screen has no notch
     var hasNotch: Bool { notchWidth > 0 }
+    /// The tallest a card can be on this screen (panel height minus the bar above it).
+    var maxCardHeight: CGFloat = 560
 
     // Hit areas, in panel (SwiftUI, top-left origin) coordinates.
     @ObservationIgnored var agentPillRect: CGRect = .zero

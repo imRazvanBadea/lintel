@@ -34,6 +34,8 @@ echo "Built $APP ($(du -sh "$APP" | cut -f1))"
 if [ "$1" = "--install" ]; then
   mkdir -p "$HOME/Applications"
   pkill -x Lintel 2>/dev/null || true
+  # Wait for it to quit, or `open` fails with -600 while the old instance is still going.
+  for _ in $(seq 1 50); do pgrep -x Lintel >/dev/null || break; sleep 0.1; done
   rm -rf "$HOME/Applications/Lintel.app"
   cp -R "$APP" "$HOME/Applications/Lintel.app"
   open "$HOME/Applications/Lintel.app"

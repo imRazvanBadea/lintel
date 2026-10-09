@@ -27,7 +27,7 @@ final class NotchPanel: NSPanel {
 
 @MainActor
 final class NotchController {
-    static let panelSize = CGSize(width: 1100, height: 600)
+    static let panelSize = CGSize(width: 1100, height: 900)
 
     let panel = NotchPanel()
     private let model = IslandModel.shared
@@ -137,7 +137,8 @@ final class NotchController {
         guard let screen = targetScreen() else { return }
         currentScreenID = Self.id(of: screen)
         let f = screen.frame
-        let size = CGSize(width: min(Self.panelSize.width, f.width), height: Self.panelSize.height)
+        // Never taller than the screen: AppKit would push the panel up and the bar would leave the screen.
+        let size = CGSize(width: min(Self.panelSize.width, f.width), height: min(Self.panelSize.height, f.height))
         panel.setFrame(NSRect(x: f.midX - size.width / 2, y: f.maxY - size.height, width: size.width, height: size.height),
                        display: true)
 
@@ -150,6 +151,8 @@ final class NotchController {
             let mb = f.maxY - screen.visibleFrame.maxY
             model.menuBarHeight = mb > 0 ? mb : 24
         }
+        // Bar + gap above the card, a margin below it.
+        model.maxCardHeight = size.height - model.menuBarHeight - (model.hasNotch ? 8 : 44) - 24
     }
 
     // MARK: Mouse

@@ -4,20 +4,39 @@ import Charts
 /// Cost (API estimate) or tokens over 24h / 7d / 30d / 90d, per tool and per model.
 struct UsageDashboard: View {
     @Environment(UsageHistory.self) private var history
-    @State private var range: UsageHistory.Range = .week
-    @State private var showCost = true
+    @Environment(IslandModel.self) private var model
+    /// The hover tooltip's size, to keep it inside the chart.
+    @State private var tipSize: CGSize = .zero
+
+    // Kept on the model so the dashboard reopens where you left it.
+    private var range: UsageHistory.Range { model.usageRange }
+    private var showCost: Bool { model.usageShowsCost }
+    private var hovered: Date? { model.usageHover }
 
     var body: some View {
         let s = history.summary(range)
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 Button { IslandModel.shared.showingUsage = false } label: { Image(systemName: "chevron.left") }
                     .buttonStyle(IconButtonStyle(size: 26))
                 Text("Usage").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.primary)
                 Spacer()
-                Segmented(options: ["Cost", "Tokens"], selection: Binding(get: { showCost ? 0 : 1 }, set: { showCost = $0 == 0 }))
+                Segmented(options: ["Cost", "Tokens"], selection: Binding(get: { showCost ? 0 : 1 }, set: { model.usageShowsCost = $0 == 0 }))
             }
+            .padding([.horizontal, .top], 20)
 
+            // Everything below the header scrolls once the card would be taller than the screen allows.
+            CappedScroll(maxHeight: model.maxCardHeight - 66) {
+                details(s)
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: range)
+        .animation(.easeInOut(duration: 0.25), value: showCost)
+        .onAppear { history.refresh() }
+    }
+
+    private func details(_ s: UsageHistory.Summary) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(showCost ? money(s.cost) : formatTokens(s.totals.total))
@@ -36,7 +55,7 @@ struct UsageDashboard: View {
                 Spacer()
                 Segmented(options: UsageHistory.Range.allCases.map(\.rawValue),
                           selection: Binding(get: { UsageHistory.Range.allCases.firstIndex(of: range) ?? 1 },
-                                             set: { range = UsageHistory.Range.allCases[$0] }))
+                                             set: { model.usageRange = UsageHistory.Range.allCases[$0] }))
             }
 
             chart(s)
@@ -67,16 +86,22 @@ struct UsageDashboard: View {
                 }
             }
         }
-        .padding(20)
-        .animation(.easeInOut(duration: 0.25), value: range)
-        .animation(.easeInOut(duration: 0.25), value: showCost)
-        .onAppear { history.refresh() }
+        .padding([.horizontal, .bottom], 20)
+        .padding(.top, 14)
     }
 
     // MARK: Pieces
 
+    /// Tools with something to plot in the current mode (Codex has tokens but no published price).
+    private func plotted(_ s: UsageHistory.Summary) -> [AgentKind] {
+        s.tools.filter { showCost ? $0.cost > 0 : $0.tokens > 0 }.map(\.tool)
+    }
+
+    private func value(_ p: UsageHistory.Point) -> Double { showCost ? p.cost : Double(p.tokens) }
+
     private func chart(_ s: UsageHistory.Summary) -> some View {
-        Chart(s.points) { p in
+        let tools = plotted(s)
+        return Chart(s.points.filter { tools.contains($0.tool) }) { p in
             AreaMark(x: .value("Time", p.date), y: .value(showCost ? "Cost" : "Tokens", showCost ? p.cost : Double(p.tokens)),
                      stacking: .unstacked)
                 .foregroundStyle(by: .value("Tool", p.tool.label))
@@ -104,7 +129,84 @@ struct UsageDashboard: View {
                     .font(.system(size: 10)).foregroundStyle(Theme.tertiary)
             }
         }
-        .frame(height: 130)
+        .chartOverlay { proxy in
+            GeometryReader { g in
+                hoverLayer(proxy, g, s, tools)
+            }
+        }
+        .frame(height: 150)
+    }
+
+    // MARK: Hover
+
+    @ViewBuilder
+    private func hoverLayer(_ proxy: ChartProxy, _ g: GeometryProxy, _ s: UsageHistory.Summary, _ tools: [AgentKind]) -> some View {
+        let plot = proxy.plotFrame.map { g[$0] } ?? .zero
+        ZStack(alignment: .topLeading) {
+            Rectangle().fill(.clear).contentShape(Rectangle())
+                .onContinuousHover { phase in
+                    switch phase {
+                    case .active(let p):
+                        let d: Date? = proxy.value(atX: p.x - plot.minX)
+                        model.usageHover = d.flatMap { nearestBucket($0, s) }
+                    case .ended:
+                        model.usageHover = nil
+                    }
+                }
+            if let h = hovered, let x = proxy.position(forX: h) {
+                let lineX = plot.minX + x
+                Rectangle().fill(Theme.secondary.opacity(0.5))
+                    .frame(width: 1, height: plot.height)
+                    .offset(x: lineX, y: plot.minY)
+                    .allowsHitTesting(false)
+                tooltip(h, s, tools)
+                    .onGeometryChange(for: CGSize.self) { $0.size } action: { tipSize = $0 }
+                    .offset(x: lineX + 12 + tipSize.width > plot.maxX ? lineX - 12 - tipSize.width : lineX + 12,
+                            y: plot.minY + max(0, (plot.height - tipSize.height) / 2))
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func nearestBucket(_ d: Date, _ s: UsageHistory.Summary) -> Date? {
+        let start = Date().addingTimeInterval(-range.seconds)
+        guard d >= start.addingTimeInterval(-range.step), d <= Date().addingTimeInterval(range.step) else { return nil }
+        return Set(s.points.map(\.date)).min { abs($0.timeIntervalSince(d)) < abs($1.timeIntervalSince(d)) }
+    }
+
+    private func tooltip(_ date: Date, _ s: UsageHistory.Summary, _ tools: [AgentKind]) -> some View {
+        let here = s.points.filter { $0.date == date }
+        let rows = (tools.isEmpty ? s.tools.map(\.tool) : tools).map { t in (t, here.filter { $0.tool == t }.reduce(0) { $0 + value($1) }) }
+        let total = rows.reduce(0) { $0 + $1.1 }
+        func fmt(_ v: Double) -> String { showCost ? money(v) : formatTokens(Int(v)) }
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(range == .day ? date.formatted(.dateTime.month(.abbreviated).day().hour().minute())
+                               : date.formatted(.dateTime.month(.abbreviated).day()))
+                .font(.system(size: 11.5)).foregroundStyle(Theme.tertiary)
+            ForEach(rows, id: \.0) { t, v in
+                HStack(spacing: 6) {
+                    AgentLogo(kind: t, size: 12)
+                    Text(t.label).foregroundStyle(Theme.secondary)
+                    Spacer(minLength: 14)
+                    Text(fmt(v)).monospacedDigit().foregroundStyle(Theme.primary)
+                }
+            }
+            if rows.count > 1 {
+                Rectangle().fill(Theme.hairline).frame(height: 1)
+                HStack {
+                    Text("Total").foregroundStyle(Theme.secondary)
+                    Spacer(minLength: 14)
+                    Text(fmt(total)).monospacedDigit().foregroundStyle(Theme.primary)
+                }
+            }
+        }
+        .font(.system(size: 12))
+        .padding(.horizontal, 10).padding(.vertical, 8)
+        .frame(minWidth: 150)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.raised))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.hairline))
+        .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
+        .fixedSize()
     }
 
     private func toolRow(_ t: UsageHistory.ToolTotal, _ s: UsageHistory.Summary) -> some View {
@@ -157,6 +259,30 @@ struct UsageDashboard: View {
     private func percent(_ v: Double) -> String {
         v > 0 && v < 0.001 ? "<0.1%" : String(format: "%.1f%%", v * 100)
     }
+}
+
+/// Its content at natural height, scrolling only when that would exceed `maxHeight`.
+struct CappedScroll<Content: View>: View {
+    var maxHeight: CGFloat
+    @ViewBuilder var content: Content
+    @State private var height: CGFloat = 0
+
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            content.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(height: height > 0 ? min(height, cap) : nil)
+        // A soft bottom edge hints there's more to scroll.
+        .mask(LinearGradient(stops: [.init(color: .black, location: 0),
+                                     .init(color: .black, location: height > cap ? 0.92 : 1),
+                                     .init(color: height > cap ? .clear : .black, location: 1)],
+                             startPoint: .top, endPoint: .bottom))
+    }
+
+    private var cap: CGFloat { max(maxHeight, 200) }
+
+
 }
 
 /// A small pill-style segmented control that matches the rest of Lintel.

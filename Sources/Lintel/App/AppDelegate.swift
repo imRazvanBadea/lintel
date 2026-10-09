@@ -48,6 +48,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case "usage":
                 IslandModel.shared.expand(.agents, pinned: true)
                 IslandModel.shared.showingUsage = true
+            case _ where cmd.hasPrefix("usage-range-"):
+                if let r = UsageHistory.Range(rawValue: String(cmd.dropFirst(12))) { IslandModel.shared.usageRange = r }
+            case "usage-tokens", "usage-cost":
+                IslandModel.shared.usageShowsCost = cmd == "usage-cost"
+            case _ where cmd.hasPrefix("max-card-"): // simulate a short screen
+                if let h = Double(cmd.dropFirst(9)) { IslandModel.shared.maxCardHeight = h }
+            case "usage-hover-off": IslandModel.shared.usageHover = nil
+            case _ where cmd.hasPrefix("usage-hover-"):
+                // Days back from today (0 = today); hovers that day's bucket.
+                let days = Double(cmd.dropFirst(12)) ?? 0
+                let d = Calendar.current.startOfDay(for: Date().addingTimeInterval(-days * 86_400))
+                IslandModel.shared.usageHover = d
             case "collapse": IslandModel.shared.collapse()
             case "snapshot": self?.notch.snapshot(to: NSTemporaryDirectory() + "lintel-snapshot.png")
             case "snapshot-clear": self?.notch.snapshot(to: NSTemporaryDirectory() + "lintel-snapshot.png", transparent: true)
