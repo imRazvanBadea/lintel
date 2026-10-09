@@ -6,11 +6,13 @@ ROOT="$(pwd)"
 APP="$ROOT/build/Lintel.app"
 
 swift build -c release --arch arm64
-BIN="$(swift build -c release --arch arm64 --show-bin-path)/Lintel"
+BINDIR="$(swift build -c release --arch arm64 --show-bin-path)"
+BIN="$BINDIR/Lintel"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Lintel"
+cp "$BINDIR/lintel-hook" "$APP/Contents/MacOS/lintel-hook"   # hook helper agents run (see Sources/LintelHook)
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 
 # Now Playing bridge (loaded by /usr/bin/perl, see Bridge/LintelNowPlaying.m)
@@ -25,6 +27,7 @@ fi
 cp build/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 codesign --force --sign - "$APP/Contents/Resources/libLintelNowPlaying.dylib"
+codesign --force --sign - "$APP/Contents/MacOS/lintel-hook"
 codesign --force --sign - --identifier com.razvanbadea.lintel "$APP"
 echo "Built $APP ($(du -sh "$APP" | cut -f1))"
 

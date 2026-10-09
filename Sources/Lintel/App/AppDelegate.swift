@@ -11,6 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         AgentStore.shared.start()
         UsageStore.shared.start()
+        // Build the usage history index in the background shortly after launch.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { UsageHistory.shared.refresh() }
         NowPlaying.shared.start()
         notch = NotchController()
 
@@ -43,6 +45,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             switch cmd {
             case "agents": IslandModel.shared.expand(.agents, pinned: true)
             case "music": IslandModel.shared.expand(.music, pinned: true)
+            case "usage":
+                IslandModel.shared.expand(.agents, pinned: true)
+                IslandModel.shared.showingUsage = true
             case "collapse": IslandModel.shared.collapse()
             case "snapshot": self?.notch.snapshot(to: NSTemporaryDirectory() + "lintel-snapshot.png")
             case "snapshot-clear": self?.notch.snapshot(to: NSTemporaryDirectory() + "lintel-snapshot.png", transparent: true)
@@ -65,6 +70,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case "demo-permission", "demo-question":
                 AgentStore.shared.showDemoPrompt(String(cmd.dropFirst(5)))
                 IslandModel.shared.expand(.agents, pinned: true)
+            case _ where cmd.hasPrefix("connect-"):
+                if let t = AgentHooks.Target(rawValue: String(cmd.dropFirst(8))) { try? AgentHooks.install(t) }
+            case "usage-summary":
+                let s = UsageHistory.shared.summary(.month)
+                let obj: [String: Any] = ["cost": s.cost, "sessions": s.sessions, "input": s.totals.input, "output": s.totals.output,
+                                          "cacheRead": s.totals.cacheRead, "w5": s.totals.cacheWrite5m, "w1": s.totals.cacheWrite1h,
+                                          "tools": s.tools.map { ["tool": $0.tool.rawValue, "tokens": $0.tokens, "cost": $0.cost, "sessions": $0.sessions] }]
+                let data = (try? JSONSerialization.data(withJSONObject: obj, options: .prettyPrinted)) ?? Data()
+                responder.respond(String(data: data, encoding: .utf8) ?? "")
+                return
+            case "codex-readiness":
+                AgentHooks.codexReadiness { r in DispatchQueue.main.async { responder.respond("\(r)") } }
+                return
             case _ where cmd.hasPrefix("theme-"):
                 Settings.shared.appearance = AppearanceChoice(rawValue: String(cmd.dropFirst(6))) ?? .system
             case _ where cmd.hasPrefix("display-"):
@@ -146,6 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.removeAllItems()
         menu.addItem(withTitle: "Show Agents", action: #selector(showAgents), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Show Music", action: #selector(showMusic), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Usage History", action: #selector(showUsage), keyEquivalent: "").target = self
         menu.addItem(.separator())
         for t in AgentHooks.Target.allCases {
             if AgentHooks.isInstalled(t) {
@@ -199,6 +218,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         do { try AgentHooks.install(t) } catch { showError(error) }
     }
     @objc private func showAgents() { IslandModel.shared.expand(.agents, pinned: true) }
+    @objc private func showUsage() {
+        IslandModel.shared.expand(.agents, pinned: true)
+        IslandModel.shared.showingUsage = true
+    }
     @objc private func showMusic() { IslandModel.shared.expand(.music, pinned: true) }
 
     @objc func showSettings() {

@@ -235,31 +235,39 @@ final class AgentSession: Identifiable {
         if let m = message, !m.isEmpty { lastMessage = m }
     }
 
+    /// Reads the git branch for `cwd` — off the main thread, because the folder can be on a slow or
+    /// virtual file system (Google Drive, iCloud, network shares) where a read can block for a long time.
     func refreshBranch() {
         guard !cwd.isEmpty else { return }
-        var dir = URL(fileURLWithPath: cwd)
-        for _ in 0..<8 {
-            let head = dir.appendingPathComponent(".git/HEAD")
-            if let s = try? String(contentsOf: head, encoding: .utf8) {
-                let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
-                branch = t.hasPrefix("ref: refs/heads/") ? String(t.dropFirst(16)) : String(t.prefix(7))
-                return
+        let path = cwd, id = self.id
+        DispatchQueue.global(qos: .utility).async {
+            let b = Self.gitBranch(at: path)
+            DispatchQueue.main.async {
+                guard let s = AgentStore.shared.existing(id), s.cwd == path, s.branch != b else { return }
+                s.branch = b
             }
+        }
+    }
+
+    nonisolated static func gitBranch(at path: String) -> String? {
+        func head(_ s: String) -> String {
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.hasPrefix("ref: refs/heads/") ? String(t.dropFirst(16)) : String(t.prefix(7))
+        }
+        var dir = URL(fileURLWithPath: path)
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        for _ in 0..<8 {
+            if let s = try? String(contentsOf: dir.appendingPathComponent(".git/HEAD"), encoding: .utf8) { return head(s) }
             // Worktrees: .git is a file pointing at the real gitdir.
-            let gitFile = dir.appendingPathComponent(".git")
-            if let s = try? String(contentsOf: gitFile, encoding: .utf8), s.hasPrefix("gitdir:") {
-                let path = s.dropFirst(7).trimmingCharacters(in: .whitespacesAndNewlines)
-                if let h = try? String(contentsOfFile: path + "/HEAD", encoding: .utf8) {
-                    let t = h.trimmingCharacters(in: .whitespacesAndNewlines)
-                    branch = t.hasPrefix("ref: refs/heads/") ? String(t.dropFirst(16)) : String(t.prefix(7))
-                }
-                return
+            if let s = try? String(contentsOf: dir.appendingPathComponent(".git"), encoding: .utf8), s.hasPrefix("gitdir:") {
+                let gitdir = s.dropFirst(7).trimmingCharacters(in: .whitespacesAndNewlines)
+                return (try? String(contentsOfFile: gitdir + "/HEAD", encoding: .utf8)).map(head)
             }
             let parent = dir.deletingLastPathComponent()
-            if parent == dir { break }
+            if parent == dir || parent.path == home || parent.path.count < home.count { break }
             dir = parent
         }
-        branch = nil
+        return nil
     }
 }
 

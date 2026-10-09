@@ -8,7 +8,9 @@ struct AgentCard: View {
 
     var body: some View {
         Group {
-            if let id = model.selectedSessionID, let s = store.existing(id),
+            if model.showingUsage {
+                UsageDashboard()
+            } else if let id = model.selectedSessionID, let s = store.existing(id),
                let p = store.pending.first(where: { $0.sessionID == id && $0.isBlocking }) {
                 AttentionView(request: p, session: s, queued: 0)
             } else if let id = model.selectedSessionID, let s = store.existing(id),
@@ -29,7 +31,10 @@ struct AgentCard: View {
                     UsageFooter()
                 }
             } else if store.sessions.isEmpty {
-                EmptyAgentsView()
+                VStack(spacing: 0) {
+                    EmptyAgentsView()
+                    UsageFooter()
+                }
             } else {
                 VStack(spacing: 0) {
                     SessionListView()
@@ -37,10 +42,11 @@ struct AgentCard: View {
                 }
             }
         }
-        .frame(width: 440)
+        .frame(width: model.showingUsage ? 500 : 440)
         .card()
         .animation(.spring(response: 0.35, dampingFraction: 0.86), value: model.selectedSessionID)
         .animation(.spring(response: 0.35, dampingFraction: 0.86), value: model.showingList)
+        .animation(.spring(response: 0.35, dampingFraction: 0.86), value: model.showingUsage)
         .animation(.spring(response: 0.35, dampingFraction: 0.86), value: store.pending.map(\.id))
     }
 }
@@ -64,9 +70,10 @@ struct UsageFooter: View {
     @Environment(AgentStore.self) private var store
     @Environment(UsageStore.self) private var usage
 
+    /// The tools with a session open — or, with nothing running, every tool we have numbers for.
     private var kinds: [AgentKind] {
         let active = Set(store.sessions.map(\.kind))
-        return [AgentKind.claude, .cursor, .codex].filter { active.contains($0) && usage.usage[$0] != nil }
+        return [AgentKind.claude, .cursor, .codex].filter { (active.isEmpty || active.contains($0)) && usage.usage[$0] != nil }
     }
 
     var body: some View {
@@ -87,6 +94,9 @@ struct UsageFooter: View {
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 14)
+            .contentShape(Rectangle())
+            .onTapGesture { IslandModel.shared.showingUsage = true }
+            .help("Usage history")
         }
     }
 

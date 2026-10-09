@@ -40,6 +40,12 @@ final class Settings {
     var permissionTimeout: Int { didSet { d.set(permissionTimeout, forKey: "permissionTimeout") } }
     var autoExpandOnAttention: Bool { didSet { d.set(autoExpandOnAttention, forKey: "autoExpand") } }
     var playSounds: Bool { didSet { d.set(playSounds, forKey: "playSounds") } }
+    var needsYouSound: String { didSet { d.set(needsYouSound, forKey: "needsYouSound") } }
+    var finishedSound: String { didSet { d.set(finishedSound, forKey: "finishedSound") } }
+    /// No sound when the app running that session is already in front.
+    var muteWhenFocused: Bool { didSet { d.set(muteWhenFocused, forKey: "muteWhenFocused") } }
+    /// Notify when a plan window crosses 80% and 100%.
+    var usageAlerts: Bool { didSet { d.set(usageAlerts, forKey: "usageAlerts") } }
     var codexEnabled: Bool { didSet { d.set(codexEnabled, forKey: "codexEnabled"); onCodexChange?() } }
     /// Hold Cursor's shell commands until you approve them in the notch (Cursor's own allowlist still applies after).
     var cursorShellApprovals: Bool { didSet { d.set(cursorShellApprovals, forKey: "cursorShellApprovals") } }
@@ -79,6 +85,10 @@ final class Settings {
             "permissionTimeout": 600,
             "autoExpand": true,
             "playSounds": true,
+            "needsYouSound": "Tink",
+            "finishedSound": "Glass",
+            "muteWhenFocused": true,
+            "usageAlerts": true,
             "codexEnabled": true,
             "musicEnabled": true,
             "cursorShellApprovals": false,
@@ -92,6 +102,10 @@ final class Settings {
         permissionTimeout = d.integer(forKey: "permissionTimeout")
         autoExpandOnAttention = d.bool(forKey: "autoExpand")
         playSounds = d.bool(forKey: "playSounds")
+        needsYouSound = d.string(forKey: "needsYouSound") ?? "Tink"
+        finishedSound = d.string(forKey: "finishedSound") ?? "Glass"
+        muteWhenFocused = d.bool(forKey: "muteWhenFocused")
+        usageAlerts = d.bool(forKey: "usageAlerts")
         codexEnabled = d.bool(forKey: "codexEnabled")
         musicEnabled = d.bool(forKey: "musicEnabled")
         cursorShellApprovals = d.bool(forKey: "cursorShellApprovals")

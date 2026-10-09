@@ -26,7 +26,9 @@ final class UsageStore {
         var note: String?
     }
 
-    private(set) var usage: [AgentKind: Usage] = [:]
+    private(set) var usage: [AgentKind: Usage] = [:] {
+        didSet { for (k, u) in usage where u != oldValue[k] { UsageAlerts.check(k, u) } }
+    }
 
     @ObservationIgnored private var lastExact = Date.distantPast
     @ObservationIgnored private var lastProbe = Date.distantPast

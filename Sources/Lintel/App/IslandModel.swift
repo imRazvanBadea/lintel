@@ -14,6 +14,8 @@ final class IslandModel {
     var selectedSessionID: String?
     /// Set by the back button: show the session list instead of the latest "Finished" card.
     var showingList = false
+    /// The usage dashboard is open in the agents card.
+    var showingUsage = false
     /// The pointer is over the notch bar (Minimal notch style shows the wings only then).
     var hoveringBar = false
     /// Wings pop out briefly for events (new song, finished turn) in Minimal style.
@@ -90,6 +92,7 @@ final class IslandModel {
         cardRect = .zero
         selectedSessionID = nil
         showingList = false
+        showingUsage = false
         NotificationCenter.default.post(name: .lintelCollapsed, object: nil)
     }
 }

@@ -212,7 +212,8 @@ final class CodexWatcher {
                         s.tokens = (last["input_tokens"] as? Int ?? 0) + (last["output_tokens"] as? Int ?? 0)
                     }
                 case let t where t.contains("approval"):
-                    if !initial {
+                    // With Lintel's Codex hooks connected, the PermissionRequest hook brings the real prompt.
+                    if !initial && !AgentHooks.isInstalled(.codex) {
                         s.status = .waiting
                         let msg = (p["command"] as? [String]).map { $0.joined(separator: " ") } ?? (p["reason"] as? String ?? "Codex needs your approval")
                         store.add(PendingRequest(sessionID: s.id, kind: .external(message: msg)) { _ in })

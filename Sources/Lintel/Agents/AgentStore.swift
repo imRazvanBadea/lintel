@@ -88,7 +88,7 @@ final class AgentStore {
     func add(_ p: PendingRequest) {
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { pending.append(p) }
         if p.isBlocking {
-            if Settings.shared.playSounds { NSSound(named: "Tink")?.play() }
+            Sounds.play(.needsYou, for: existing(p.sessionID))
             onAttention?()
         }
     }
@@ -145,6 +145,22 @@ final class AgentStore {
             return
         }
         focusTerminal(s, host: host)
+    }
+
+    /// The app running a session (terminal, editor, Claude / Codex / Cursor app).
+    func hostBundleID(_ s: AgentSession) -> String? {
+        switch s.kind {
+        case .codex: return "com.openai.codex"
+        case .cursor: return Self.cursorBundleID
+        case .claude:
+            return (s.agentPID ?? s.hookPPID).flatMap { Proc.hostingApp(of: $0)?.bundleIdentifier }
+                ?? Self.bundleForTerm(s.termProgram)
+        }
+    }
+
+    func isHostAppFrontmost(_ s: AgentSession) -> Bool {
+        guard let host = hostBundleID(s), let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return false }
+        return host == front
     }
 
     /// Terminal / iTerm: select the tab running the session (matched by its tty). Others: bring the app forward.
@@ -213,7 +229,8 @@ final class AgentStore {
         if parts.count == 2, parts[0] == "debug" { debugHandler?(String(parts[1]), responder); return }
         if Date() < demoUntil { responder.respond(parts.first == "cursor" ? "{}" : ""); return }
         if parts.count == 2, parts[0] == "cursor" { handleCursor(String(parts[1]), req, responder); return }
-        guard parts.count == 2, parts[0] == "claude" else { responder.respond(""); return }
+        guard parts.count == 2, parts[0] == "claude" || parts[0] == "codex" else { responder.respond(""); return }
+        let fromCodex = parts[0] == "codex"
         guard let json = (try? JSONSerialization.jsonObject(with: req.body)) as? [String: Any],
               let sid = json["session_id"] as? String else { responder.respond(""); return }
         let event = String(parts[1])
@@ -236,7 +253,7 @@ final class AgentStore {
 
         // Cursor's agent also runs hooks from ~/.claude/settings.json. Recognise it by the process tree.
         let ppid = req.headers["x-lintel-ppid"].flatMap { pid_t($0) }
-        let kind = json["cursor_version"] != nil ? .cursor : originKind(sid: sid, ppid: ppid)
+        let kind: AgentKind = fromCodex ? .codex : (json["cursor_version"] != nil ? .cursor : originKind(sid: sid, ppid: ppid))
         if kind == .cursor && AgentHooks.isInstalled(.cursor) {
             responder.respond("") // Cursor's own hooks already report this conversation
             return
@@ -247,7 +264,7 @@ final class AgentStore {
         // Cursor reports the workspace in workspace_roots; its cwd can be an internal directory.
         let cwd = (json["workspace_roots"] as? [String])?.first ?? json["cwd"] as? String
         if let cwd, !cwd.isEmpty, cwd != s.cwd { s.cwd = cwd; s.refreshBranch() }
-        if let t = json["transcript_path"] as? String { s.transcriptPath = t }
+        if kind != .codex, let t = json["transcript_path"] as? String { s.transcriptPath = t }
         if let term = req.headers["x-lintel-term"], !term.isEmpty { s.termProgram = term }
         if let pp = req.headers["x-lintel-ppid"].flatMap({ pid_t($0) }) {
             s.hookPPID = pp
@@ -409,6 +426,7 @@ final class AgentStore {
                                       text: t.trimmingCharacters(in: .whitespacesAndNewlines), date: Date()))
             }
             refreshTitle(s)
+            UsageHistory.recordCursor(session: sid, model: (json["model"] as? String) ?? (json["model_id"] as? String) ?? "cursor", json: json)
             let keys = ["input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"]
             let n = keys.reduce(0) { $0 + ((json[$1] as? NSNumber)?.intValue ?? 0) }
             if n > 0 { s.tokens = n }
@@ -465,7 +483,7 @@ final class AgentStore {
     /// Brief "Finished" toast: open the agents island on this session for a few seconds.
     var finishedFlash: String?
     func announceFinished(_ s: AgentSession) {
-        if Settings.shared.playSounds { NSSound(named: "Glass")?.play() }
+        Sounds.play(.finished, for: s)
         let model = IslandModel.shared
         guard model.expanded == nil || model.expanded == .agents, !hasPendingRequests else { return }
         finishedFlash = s.id
