@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Build the usage history index in the background shortly after launch.
         DispatchQueue.main.asyncAfter(deadline: .now() + 20) { UsageHistory.shared.refresh() }
         NowPlaying.shared.start()
+        Updater.shared.start()
         notch = NotchController()
 
         setUpStatusItem()
@@ -84,6 +85,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 IslandModel.shared.expand(.agents, pinned: true)
             case _ where cmd.hasPrefix("connect-"):
                 if let t = AgentHooks.Target(rawValue: String(cmd.dropFirst(8))) { try? AgentHooks.install(t) }
+            case "update-check":
+                Updater.shared.check()
+            case "update-install":
+                Updater.shared.install()
             case "probe-claude":
                 UsageStore.shared.probeClaude(minInterval: 0)
             case "probe-extra":
@@ -118,6 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     "music": NowPlaying.shared.state.map { "\($0.track.title) — \($0.track.artist) playing=\($0.isPlaying) app=\($0.appBundleID) next=\($0.upNext.map(\.title))" } ?? "none",
                     "musicSource": NowPlaying.shared.sourceLabel,
                     "usage": UsageStore.shared.usage.map { "\($0.key.label): \(Int($0.value.short?.usedPercent ?? -1))% / \(Int($0.value.weekly?.usedPercent ?? -1))%\($0.value.short?.estimated == true ? " (estimated)" : "")" },
+                    "update": "\(Updater.shared.state) latest=\(Updater.shared.latest?.version ?? "-") current=\(Updater.currentVersion)",
                     "extraAccounts": UsageStore.shared.extraUsage.map { "\($0.key.label): \(Int($0.value.short?.usedPercent ?? -1))% / \(Int($0.value.weekly?.usedPercent ?? -1))%" },
                     "musicHint": NowPlaying.shared.hint ?? "",
                 ]
@@ -205,11 +211,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         appearance.submenu = sub
         menu.addItem(appearance)
+        if Updater.shared.state == .available, let v = Updater.shared.latest?.version {
+            menu.addItem(withTitle: "Update to Lintel \(v)…", action: #selector(installUpdate), keyEquivalent: "").target = self
+        }
         menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",").target = self
         menu.addItem(withTitle: "Hide Menu Bar Icon", action: #selector(hideMenuBarIcon), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Lintel", action: #selector(quit), keyEquivalent: "q").target = self
     }
+
+    @objc private func installUpdate() { Updater.shared.install() }
 
     private func setUpMainMenu() {
         let main = NSMenu()

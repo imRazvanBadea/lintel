@@ -54,6 +54,8 @@ final class Settings {
     var notchStyle: NotchStyle { didSet { d.set(notchStyle.rawValue, forKey: "notchStyle") } }
     var showMenuBarIcon: Bool { didSet { d.set(showMenuBarIcon, forKey: "showMenuBarIcon"); onMenuBarIconChange?() } }
     var showUpNext: Bool { didSet { d.set(showUpNext, forKey: "showUpNext") } }
+    /// Look for a new release on GitHub once a day.
+    var checkForUpdates: Bool { didSet { d.set(checkForUpdates, forKey: "checkForUpdates"); Updater.shared.start() } }
 
     var launchAtLogin: Bool {
         get { SMAppService.mainApp.status == .enabled }
@@ -93,6 +95,7 @@ final class Settings {
             "musicEnabled": true,
             "cursorShellApprovals": false,
             "showUpNext": true,
+            "checkForUpdates": true,
             "showMenuBarIcon": true,
             "notchStyle": NotchStyle.minimal.rawValue,
         ])
@@ -110,6 +113,7 @@ final class Settings {
         musicEnabled = d.bool(forKey: "musicEnabled")
         cursorShellApprovals = d.bool(forKey: "cursorShellApprovals")
         showUpNext = d.bool(forKey: "showUpNext")
+        checkForUpdates = d.bool(forKey: "checkForUpdates")
         showMenuBarIcon = d.bool(forKey: "showMenuBarIcon")
         notchStyle = NotchStyle(rawValue: d.string(forKey: "notchStyle") ?? "") ?? .minimal
     }

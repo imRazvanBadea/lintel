@@ -109,6 +109,11 @@ struct SettingsView: View {
                 LabeledContent("Settings", value: "⌃⌥,")
                 LabeledContent("Jump to session (card open)", value: "⌘1 … ⌘9")
             }
+
+            Section("Updates") {
+                UpdatesRow()
+                Toggle("Check for updates automatically", isOn: $s.checkForUpdates)
+            }
         }
         .formStyle(.grouped)
         .onAppear(perform: checkCodex)
@@ -139,5 +144,39 @@ struct SettingsView: View {
         } catch let e { error = e.localizedDescription }
         installed[t] = AgentHooks.isInstalled(t)
         if t == .codex { checkCodex() }
+    }
+}
+
+/// Version, update status and the button that installs a new release.
+private struct UpdatesRow: View {
+    @State private var updater = Updater.shared
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Lintel \(Updater.currentVersion)")
+                Text(status).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if [.checking, .downloading, .installing].contains(updater.state) {
+                ProgressView().controlSize(.small)
+            } else if let v = updater.latest?.version, Updater.isNewer(v, than: Updater.currentVersion) {
+                Button("Update to \(v)") { updater.install() }
+            } else {
+                Button("Check Now") { updater.check() }
+            }
+        }
+    }
+
+    private var status: String {
+        switch updater.state {
+        case .idle: "Updates come from the GitHub releases."
+        case .checking: "Checking…"
+        case .upToDate: "You're up to date."
+        case .available: "Version \(updater.latest?.version ?? "") is available."
+        case .downloading: "Downloading…"
+        case .installing: "Installing, Lintel will reopen…"
+        case .failed(let why): why
+        }
     }
 }
