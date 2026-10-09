@@ -315,11 +315,9 @@ struct SessionDetailView: View {
     var showBack: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                if showBack {
-                    BackButton()
-                }
+                if showBack { BackButton() }
                 Avatar(session: session, size: 24)
                     .padding(.horizontal, 2)
                 VStack(alignment: .leading, spacing: 1) {
@@ -335,84 +333,208 @@ struct SessionDetailView: View {
                     .font(.system(size: 12)).foregroundStyle(Theme.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 0)
+                StatusChip(session: session)
             }
-
-            PhaseStrip(current: session.phase, active: session.status == .working || session.status == .finished,
-                       done: session.status == .finished)
 
             if let notice = session.notice {
                 Text(notice).font(.system(size: 12.5)).foregroundStyle(Theme.amber).lineLimit(2)
             }
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(session.tools.isEmpty ? "No tool calls yet" : "Tool calls")
-                    .font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.tertiary)
-                    .padding(.bottom, 4)
-                ForEach(session.tools.prefix(4)) { t in
-                    HStack(spacing: 10) {
-                        Image(systemName: Phase.forTool(t.name, detail: t.detail).symbol)
-                            .font(.system(size: 11.5)).foregroundStyle(Theme.tertiary).frame(width: 16)
-                        Text(t.name).font(.system(size: 13.5, weight: .medium)).foregroundStyle(Theme.primary)
-                        Text(t.detail).font(Theme.mono).foregroundStyle(Theme.secondary).lineLimit(1).truncationMode(.middle)
-                        Spacer(minLength: 6)
-                        Text("×\(t.count)").font(.system(size: 12, design: .rounded)).foregroundStyle(Theme.tertiary)
-                    }
-                    .padding(.vertical, 5)
-                }
-            }
-
-            Divider().overlay(Theme.hairline)
+            ActivityFeed(session: session)
 
             TimelineView(.periodic(from: .now, by: 1)) { _ in
-                HStack {
-                    stat("Tokens", session.tokens > 0 ? formatTokens(session.tokens) : "—")
-                    stat("Turn", session.turnDuration.map(formatDuration) ?? "—")
-                    stat("Model", session.model.isEmpty ? session.kind.label.lowercased() : session.model)
+                HStack(spacing: 6) {
+                    let parts = [session.tokens > 0 ? "\(formatTokens(session.tokens)) tokens" : nil,
+                                 session.model.isEmpty ? nil : session.model,
+                                 session.turnDuration.map { "turn \(formatDuration($0))" }].compactMap { $0 }
+                    Text(parts.joined(separator: "  ·  "))
+                    Spacer(minLength: 0)
                 }
+                .font(.system(size: 11.5)).monospacedDigit().foregroundStyle(Theme.tertiary)
             }
 
             Button("Jump to session") { AgentStore.shared.reveal(session); IslandModel.shared.collapse() }
                 .buttonStyle(PillButtonStyle(kind: .secondary, height: 34))
         }
         .padding(20)
-    }
-
-    private func stat(_ label: String, _ value: String) -> some View {
-        VStack(spacing: 3) {
-            Text(label).font(.system(size: 11.5)).foregroundStyle(Theme.tertiary)
-            Text(value).font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.primary).lineLimit(1)
-        }
-        .frame(maxWidth: .infinity)
+        .onAppear { AgentStore.shared.refreshFeed(session, force: true) }
     }
 }
 
-struct PhaseStrip: View {
-    let current: Phase
-    let active: Bool
-    let done: Bool
+/// Working / Waiting on you / Finished, with how long.
+struct StatusChip: View {
+    let session: AgentSession
 
     var body: some View {
-        HStack(spacing: 2) {
-            ForEach(Phase.allCases, id: \.self) { p in
-                let on = active && p == current
-                VStack(spacing: 5) {
-                    Image(systemName: p == .reviewing && done ? "checkmark.circle.fill" : p.symbol)
-                        .font(.system(size: 13.5, weight: .medium))
-                    Text(p.label).font(.system(size: 11.5, weight: on ? .medium : .regular))
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            HStack(spacing: 5) {
+                Circle().fill(session.statusColor).frame(width: 6, height: 6)
+                Text(label).lineLimit(1)
+            }
+            .font(.system(size: 11.5, weight: .medium)).monospacedDigit()
+            .foregroundStyle(Theme.secondary)
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(Capsule().fill(Theme.fill))
+        }
+    }
+
+    private var label: String {
+        switch session.status {
+        case .working: return "Working" + (session.turnDuration.map { " · \(formatDuration($0))" } ?? "")
+        case .waiting: return "Needs you"
+        case .finished: return "Finished · " + relativeTime(session.turnEndedAt ?? session.lastEventAt)
+        case .idle: return "Idle"
+        }
+    }
+}
+
+/// The conversation, newest at the bottom: your messages, the agent's replies and thinking, and its tool calls.
+struct ActivityFeed: View {
+    let session: AgentSession
+
+    /// Your latest message — pinned above the activity so it never scrolls away.
+    private var prompt: FeedItem? { session.feed.last(where: { $0.kind == .user }) }
+
+    /// Everything the agent did since that message (capped).
+    private var items: [FeedItem] {
+        let feed = session.feed
+        guard let u = feed.lastIndex(where: { $0.kind == .user }) else { return Array(feed.suffix(30)) }
+        return Array(feed[(u + 1)...].suffix(40))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let prompt { FeedRow(item: prompt, tint: tint) }
+            activity
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Theme.fill.opacity(0.6)))
+    }
+
+    private var tint: Color { session.tint }
+
+    @ViewBuilder private var activity: some View {
+        Group {
+            if items.isEmpty {
+                Text(session.status == .working ? "Working…" : "No activity yet")
+                    .font(.system(size: 12.5)).foregroundStyle(Theme.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 10) {
+                            ForEach(items) { item in FeedRow(item: item, tint: session.tint).id(item.id) }
+                            if session.status == .working, items.last?.status != .running {
+                                WorkingRow(tint: session.tint).id("working")
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .scrollIndicators(.never)
+                    .defaultScrollAnchor(.bottom)
+                    .frame(maxHeight: 260)
+                    .mask(
+                        VStack(spacing: 0) {
+                            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 14)
+                            Color.black
+                        }
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
+                    .onChange(of: items.last?.id) { _, id in
+                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id ?? "working", anchor: .bottom) }
+                    }
                 }
-                .foregroundStyle(on ? Theme.primary : Theme.tertiary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 9)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(on ? Theme.raised : .clear)
-                        .shadow(color: on ? .black.opacity(0.08) : .clear, radius: 3, y: 1)
-                )
             }
         }
-        .padding(3)
-        .background(RoundedRectangle(cornerRadius: 15, style: .continuous).fill(Theme.fill))
-        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: current)
+    }
+}
+
+struct FeedRow: View {
+    let item: FeedItem
+    let tint: Color
+
+    var body: some View {
+        switch item.kind {
+        case .user:
+            HStack {
+                Spacer(minLength: 40)
+                Text(item.text)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.white)
+                    .lineLimit(4)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(LinearGradient(colors: [tint.lighter, tint], startPoint: .top, endPoint: .bottom))
+                    )
+                    .textSelection(.enabled)
+            }
+        case .assistant:
+            HStack(alignment: .top, spacing: 8) {
+                Circle().fill(tint).frame(width: 6, height: 6).padding(.top, 6)
+                Text(item.text)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.primary)
+                    .lineLimit(8)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+        case .thinking:
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "sparkle").font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.tertiary)
+                    .frame(width: 6).padding(.top, 3)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.duration.map { "Thought for \(formatDuration($0))" } ?? "Thought")
+                        .font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.tertiary)
+                    if !item.text.isEmpty {
+                        Text(item.text).font(.system(size: 12)).italic().foregroundStyle(Theme.tertiary).lineLimit(3)
+                    }
+                }
+            }
+        case .tool:
+            HStack(alignment: .top, spacing: 8) {
+                statusMark.frame(width: 6).padding(.top, 4)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Text(item.tool).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Theme.primary).lineLimit(1)
+                        Text(statusText).font(.system(size: 11.5)).foregroundStyle(item.status == .failed ? Theme.red : Theme.tertiary)
+                    }
+                    if !item.text.isEmpty {
+                        Text(item.text).font(.system(size: 12)).foregroundStyle(Theme.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var statusMark: some View {
+        switch item.status {
+        case .running:
+            RingSpinner(color: NSColor(tint), lineWidth: 1.5).frame(width: 9, height: 9).offset(x: -1.5, y: -1)
+        case .done: Circle().fill(Theme.green).frame(width: 6, height: 6)
+        case .failed: Circle().fill(Theme.red).frame(width: 6, height: 6)
+        }
+    }
+
+    private var statusText: String {
+        switch item.status {
+        case .running: "Running"
+        case .done: "Completed"
+        case .failed: "Failed"
+        }
+    }
+}
+
+/// The trailing "still working" line while the agent thinks between steps.
+struct WorkingRow: View {
+    let tint: Color
+    var body: some View {
+        HStack(spacing: 8) {
+            RingSpinner(color: NSColor(tint), lineWidth: 1.5).frame(width: 9, height: 9).offset(x: -1.5)
+            Text("Working…").font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.tertiary)
+        }
     }
 }
 

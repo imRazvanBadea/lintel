@@ -24,7 +24,8 @@ enum AgentHooks {
                 [("SessionStart", 5), ("UserPromptSubmit", 5), ("PreToolUse", 5), ("PostToolUse", 5),
                  ("Notification", 5), ("PermissionRequest", 86_400), ("Stop", 600), ("SessionEnd", 5)]
             case .cursor:
-                [("sessionStart", 5), ("beforeSubmitPrompt", 5), ("preToolUse", 5), ("afterAgentThought", 5),
+                [("sessionStart", 5), ("beforeSubmitPrompt", 5), ("preToolUse", 5), ("postToolUse", 5),
+                 ("postToolUseFailure", 5), ("afterAgentThought", 5),
                  ("afterAgentResponse", 5), ("beforeShellExecution", 3_600), ("stop", 600), ("sessionEnd", 5)]
             }
         }

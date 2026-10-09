@@ -183,9 +183,21 @@ final class CodexWatcher {
                 case "user_message":
                     if let m = p["message"] as? String {
                         s.lastPrompt = String(m.split(separator: "\n").first ?? "").prefix(80).description
+                        if let t = FeedReader.cleanUserText(m) {
+                            s.upsertFeed(FeedItem(id: "u-\(d["timestamp"] as? String ?? UUID().uuidString)", kind: .user,
+                                                  text: t, date: Self.date(d) ?? Date()))
+                        }
                     }
                 case "agent_message":
-                    if let m = p["message"] as? String { s.lastMessage = m }
+                    if let m = p["message"] as? String {
+                        s.lastMessage = m
+                        s.upsertFeed(FeedItem(id: "a-\(d["timestamp"] as? String ?? UUID().uuidString)", kind: .assistant,
+                                              text: m.trimmingCharacters(in: .whitespacesAndNewlines), date: Self.date(d) ?? Date()))
+                    }
+                case "agent_reasoning":
+                    let t = (p["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    s.upsertFeed(FeedItem(id: "th-\(d["timestamp"] as? String ?? UUID().uuidString)", kind: .thinking,
+                                          text: t, date: Self.date(d) ?? Date()))
                 case "task_complete":
                     s.endTurn(message: p["last_agent_message"] as? String)
                     clearExternal(s)
@@ -214,6 +226,13 @@ final class CodexWatcher {
                     clearExternal(s)
                     let name = p["name"] as? String ?? "shell"
                     s.recordTool(name, detail: Self.detail(p))
+                    let callID = p["call_id"] as? String ?? UUID().uuidString
+                    s.upsertFeed(FeedItem(id: "t-\(callID)", kind: .tool, text: Self.describe(name, p),
+                                          tool: FeedReader.displayName(name), status: .running, date: Self.date(d) ?? Date()))
+                } else if pt == "function_call_output" || pt == "custom_tool_call_output" {
+                    if let callID = p["call_id"] as? String, let i = s.feed.lastIndex(where: { $0.id == "t-\(callID)" }) {
+                        s.feed[i].status = .done
+                    }
                 }
             default: break
             }
@@ -233,6 +252,34 @@ final class CodexWatcher {
 
     private func fileModified(_ path: String) -> Date {
         (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date) ?? .distantPast
+    }
+
+    private static func date(_ d: [String: Any]) -> Date? {
+        guard let ts = d["timestamp"] as? String else { return nil }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.date(from: ts)
+    }
+
+    /// Feed text for a Codex tool call, e.g. "Running rg hero".
+    private static func describe(_ name: String, _ p: [String: Any]) -> String {
+        let raw = p["arguments"] as? String ?? p["input"] as? String ?? ""
+        if let args = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: Any] {
+            if let c = args["cmd"] as? String ?? args["command"] as? String { return c }
+            if let c = args["command"] as? [String] { return c.joined(separator: " ") }
+            return FeedReader.describe(tool: name, input: args)
+        }
+        if name == "apply_patch" {
+            // The patch names the files it touches: "*** Update File: path".
+            let files = raw.split(separator: "\n").compactMap { l -> String? in
+                for k in ["*** Update File: ", "*** Add File: ", "*** Delete File: "] where l.hasPrefix(k) {
+                    return (String(l.dropFirst(k.count)) as NSString).lastPathComponent
+                }
+                return nil
+            }
+            return files.isEmpty ? "Editing files" : "Editing " + files.prefix(3).joined(separator: ", ")
+        }
+        return detail(p)
     }
 
     private static func detail(_ p: [String: Any]) -> String {

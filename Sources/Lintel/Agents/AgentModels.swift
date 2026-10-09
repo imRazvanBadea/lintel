@@ -58,6 +58,20 @@ enum Phase: Int, CaseIterable {
     }
 }
 
+/// One line of a session's activity feed: what you said, what the agent said, thought or did.
+struct FeedItem: Identifiable, Equatable {
+    enum Kind: Equatable { case user, assistant, thinking, tool }
+    enum Status: Equatable { case running, done, failed }
+
+    let id: String
+    var kind: Kind
+    var text: String               // message / thought text, or the tool's target ("Reading ws.ts")
+    var tool: String = ""          // tool name for .tool
+    var status: Status = .done
+    var date: Date
+    var duration: TimeInterval?    // thinking time, when known
+}
+
 struct ToolStat: Identifiable, Equatable {
     var id: String { name }
     var name: String
@@ -134,6 +148,8 @@ final class AgentSession: Identifiable {
     var tokens = 0
     var model = ""
     var lastMessage = ""
+    /// Recent conversation and tool activity, oldest first (capped).
+    var feed: [FeedItem] = []
     var lastPrompt = ""
     var notice: String?
     var transcriptPath: String?
@@ -163,6 +179,21 @@ final class AgentSession: Identifiable {
     var turnDuration: TimeInterval? {
         guard let s = turnStartedAt else { return nil }
         return (turnEndedAt ?? Date()).timeIntervalSince(s)
+    }
+
+    nonisolated static let feedLimit = 60
+
+    /// Appends (or updates, by id) a feed item — used where activity arrives as events (Cursor, Codex).
+    func upsertFeed(_ item: FeedItem) {
+        if let i = feed.lastIndex(where: { $0.id == item.id }) { feed[i] = item } else { feed.append(item) }
+        if feed.count > Self.feedLimit { feed.removeFirst(feed.count - Self.feedLimit) }
+    }
+
+    /// Marks the most recent running tool call as finished (when the event doesn't carry an id).
+    func finishLatestTool(failed: Bool = false) {
+        if let i = feed.lastIndex(where: { $0.kind == .tool && $0.status == .running }) {
+            feed[i].status = failed ? .failed : .done
+        }
     }
 
     func recordTool(_ name: String, detail: String) {

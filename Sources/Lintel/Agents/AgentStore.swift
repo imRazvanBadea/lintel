@@ -255,6 +255,10 @@ final class AgentStore {
         }
         if let m = json["model"] as? String, !m.isEmpty { s.model = shortModelName(m) }
         if s.generatedTitle == nil { refreshTitle(s) } // throttled; covers sessions that began before Lintel did
+        if ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "PermissionRequest"].contains(event) {
+            // The transcript is written just after the hook fires; read a beat later.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.refreshFeed(s) }
+        }
 
         switch event {
         case "SessionStart":
@@ -361,6 +365,9 @@ final class AgentStore {
         case "beforeSubmitPrompt":
             for p in pendingFor(s) { if case .reply = p.kind { resolve(p, with: "") } }
             s.beginTurn(prompt: json["prompt"] as? String)
+            if let p = (json["prompt"] as? String).flatMap(FeedReader.cleanUserText) {
+                s.upsertFeed(FeedItem(id: "u-\(json["generation_id"] as? String ?? UUID().uuidString)", kind: .user, text: p, date: Date()))
+            }
             if s.title.isEmpty, let p = json["prompt"] as? String {
                 s.title = String(p.split(separator: "\n").first ?? "").prefix(60).description
             }
@@ -372,15 +379,35 @@ final class AgentStore {
             let tool = json["tool_name"] as? String ?? "Tool"
             let input = json["tool_input"] as? [String: Any] ?? [:]
             s.recordTool(tool, detail: Self.detail(tool: tool, input: input))
+            s.upsertFeed(FeedItem(id: "t-\(json["tool_use_id"] as? String ?? UUID().uuidString)", kind: .tool,
+                                  text: FeedReader.describe(tool: tool, input: input), tool: FeedReader.displayName(tool),
+                                  status: .running, date: Date()))
+            responder.respond("{}")
+
+        case "postToolUse", "postToolUseFailure":
+            let failed = event == "postToolUseFailure"
+            if let tid = json["tool_use_id"] as? String, let i = s.feed.lastIndex(where: { $0.id == "t-\(tid)" }) {
+                s.feed[i].status = failed ? .failed : .done
+            } else {
+                s.finishLatestTool(failed: failed)
+            }
             responder.respond("{}")
 
         case "afterAgentThought":
             s.status = .working
             s.phase = .reasoning
+            let text = (json["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let ms = (json["duration_ms"] as? NSNumber)?.doubleValue
+            s.upsertFeed(FeedItem(id: "th-\(UUID().uuidString)", kind: .thinking, text: text, date: Date(),
+                                  duration: ms.map { $0 / 1000 }))
             responder.respond("{}")
 
         case "afterAgentResponse":
-            if let t = json["text"] as? String, !t.isEmpty { s.lastMessage = t }
+            if let t = json["text"] as? String, !t.isEmpty {
+                s.lastMessage = t
+                s.upsertFeed(FeedItem(id: "a-\(json["generation_id"] as? String ?? UUID().uuidString)", kind: .assistant,
+                                      text: t.trimmingCharacters(in: .whitespacesAndNewlines), date: Date()))
+            }
             refreshTitle(s)
             let keys = ["input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"]
             let n = keys.reduce(0) { $0 + ((json[$1] as? NSNumber)?.intValue ?? 0) }
@@ -570,6 +597,22 @@ final class AgentStore {
                  tokens: 48_000, model: "opus")
         _ = make("demo-2", .cursor, "Landing page hero polish", "/Users/you/web", .working, .writing,
                  tools: [("Write", "Hero.tsx", 4)], tokens: 21_000, model: "sonnet")
+        if let s = existing("demo-1") {
+            let now = Date()
+            func at(_ secs: Double) -> Date { now.addingTimeInterval(-secs) }
+            s.feed = [
+                FeedItem(id: "f1", kind: .user, text: "The websocket drops every few minutes on flaky Wi-Fi. Can you make reconnect reliable and add a test?", date: at(110)),
+                FeedItem(id: "f2", kind: .thinking, text: "", date: at(104), duration: 6),
+                FeedItem(id: "f3", kind: .assistant, text: "I'll look at how the client reconnects today, then add backoff and a test that simulates drops.", date: at(100)),
+                FeedItem(id: "f4", kind: .tool, text: "Reading ws.ts", tool: "Read", status: .done, date: at(96)),
+                FeedItem(id: "f5", kind: .tool, text: "Searching for “reconnect”", tool: "Grep", status: .done, date: at(90)),
+                FeedItem(id: "f6", kind: .assistant, text: "Found it: reconnect retries immediately in a loop, so it hammers the server while the network is down.", date: at(70)),
+                FeedItem(id: "f7", kind: .tool, text: "Editing ws.ts", tool: "Edit", status: .done, date: at(52)),
+                FeedItem(id: "f8", kind: .tool, text: "Writing reconnect.test.ts", tool: "Write", status: .done, date: at(30)),
+                FeedItem(id: "f9", kind: .thinking, text: "", date: at(20), duration: 4),
+                FeedItem(id: "f10", kind: .tool, text: "Run the websocket tests", tool: "Bash", status: .running, date: at(8)),
+            ]
+        }
         let done = make("demo-3", .claude, "Write the changelog", "/Users/you/docs", .finished, .reviewing, tokens: 9_000, model: "sonnet")
         done.lastMessage = "Added a 1.2.0 entry covering the reconnect fix and the new settings screen."
         done.turnEndedAt = Date()
@@ -609,6 +652,34 @@ final class AgentStore {
         return kind
     }
 
+    @ObservationIgnored private var feedReads: [String: Date] = [:]
+    @ObservationIgnored private var feedPending: Set<String> = []
+
+    /// Re-reads a Claude session's transcript into its feed (throttled; only worth it while the card is open).
+    func refreshFeed(_ s: AgentSession, force: Bool = false) {
+        guard s.kind == .claude, let path = s.transcriptPath else { return }
+        guard force || IslandModel.shared.expanded == .agents else { return }
+        let id = s.id
+        if let last = feedReads[id], Date().timeIntervalSince(last) < 0.8 {
+            // Coalesce bursts of events into one read shortly after.
+            guard !feedPending.contains(id) else { return }
+            feedPending.insert(id)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                self?.feedPending.remove(id)
+                if let s = self?.existing(id) { self?.refreshFeed(s, force: true) }
+            }
+            return
+        }
+        feedReads[id] = Date()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let items = FeedReader.claude(path: path)
+            DispatchQueue.main.async {
+                guard let s = AgentStore.shared.existing(id), s.feed != items else { return }
+                s.feed = items
+            }
+        }
+    }
+
     /// Picks up the title the tool generated for this conversation (throttled).
     func refreshTitle(_ s: AgentSession, force: Bool = false) {
         guard force || s.generatedTitle == nil, Date().timeIntervalSince(s.lastTitleLookup) > (force ? 2 : 8) else { return }
@@ -622,7 +693,7 @@ final class AgentStore {
         }
     }
 
-    static func detail(tool: String, input: [String: Any]) -> String {
+    nonisolated static func detail(tool: String, input: [String: Any]) -> String {
         for key in ["command", "file_path", "notebook_path", "url", "pattern", "query", "path", "prompt", "description"] {
             if let v = input[key] as? String, !v.isEmpty {
                 if key.hasSuffix("path") || key == "path" { return (v as NSString).lastPathComponent }
