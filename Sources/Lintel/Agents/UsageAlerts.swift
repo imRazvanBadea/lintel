@@ -11,11 +11,12 @@ enum UsageAlerts {
         set { UserDefaults.standard.set(newValue, forKey: "usageAlertsNotified") }
     }
 
-    static func check(_ kind: AgentKind, _ usage: UsageStore.Usage) {
+    /// `label` names the account in the notification ("Claude", "Claude (work)"); `key` identifies it.
+    static func check(_ label: String, key accountKey: String, _ usage: UsageStore.Usage) {
         guard Settings.shared.usageAlerts else { return }
-        for (label, window) in [("5-hour", usage.short), ("weekly", usage.weekly)] {
+        for (windowName, window) in [("5-hour", usage.short), ("weekly", usage.weekly)] {
             guard let w = window, !w.estimated else { continue }
-            let key = "\(kind.rawValue).\(label)"
+            let key = "\(accountKey).\(windowName)"
             let level = w.usedPercent >= 100 ? 100 : (w.usedPercent >= 80 ? 80 : 0)
             // A window is identified by when it resets (rounded, since it can wobble by a second).
             let windowID = w.resetsAt.map { String(Int($0.timeIntervalSince1970 / 600)) } ?? "?"
@@ -24,23 +25,23 @@ enum UsageAlerts {
             let sameWindow = parts.count > 1 && String(parts[1]) == windowID
             guard level > 0, !(sameWindow && level <= previous) else { continue }
             notified[key] = "\(level)|\(windowID)"
-            send(kind: kind, window: label, level: level, resetsAt: w.resetsAt)
+            send(account: label, key: accountKey, window: windowName, level: level, resetsAt: w.resetsAt)
         }
     }
 
-    private static func send(kind: AgentKind, window: String, level: Int, resetsAt: Date?) {
+    private static func send(account: String, key: String, window: String, level: Int, resetsAt: Date?) {
         let center = UNUserNotificationCenter.current()
         center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
             guard granted else { return }
             let content = UNMutableNotificationContent()
-            content.title = level >= 100 ? "\(kind.label): \(window) limit reached" : "\(kind.label): \(level)% of the \(window) limit used"
+            content.title = level >= 100 ? "\(account): \(window) limit reached" : "\(account): \(level)% of the \(window) limit used"
             if let r = resetsAt {
                 let f = RelativeDateTimeFormatter()
                 f.unitsStyle = .full
                 content.body = "Resets \(f.localizedString(for: r, relativeTo: Date()))."
             }
             content.sound = nil // Lintel plays its own sounds
-            UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "lintel.usage.\(kind.rawValue).\(window).\(level)", content: content, trigger: nil))
+            UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "lintel.usage.\(key).\(window).\(level)", content: content, trigger: nil))
         }
     }
 }

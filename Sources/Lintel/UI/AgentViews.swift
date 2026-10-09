@@ -70,24 +70,33 @@ struct UsageFooter: View {
     @Environment(AgentStore.self) private var store
     @Environment(UsageStore.self) private var usage
 
-    /// The tools with a session open — or, with nothing running, every tool we have numbers for.
-    private var kinds: [AgentKind] {
+    /// One row of the footer: a tool's default account, or an extra one ("work").
+    struct Entry: Identifiable { let id: String; let kind: AgentKind; let slug: String?; let usage: UsageStore.Usage }
+
+    /// Accounts of the tools with a session open — or, with nothing running, every account we have numbers for.
+    private var entries: [Entry] {
         let active = Set(store.sessions.map(\.kind))
-        return [AgentKind.claude, .cursor, .codex].filter { (active.isEmpty || active.contains($0)) && usage.usage[$0] != nil }
+        var out: [Entry] = []
+        for k in [AgentKind.claude, .cursor, .codex] where active.isEmpty || active.contains(k) {
+            if let u = usage.usage[k] { out.append(Entry(id: k.rawValue, kind: k, slug: nil, usage: u)) }
+            for (a, u) in usage.extraUsage.sorted(by: { $0.key.id < $1.key.id }) where a.kind == k {
+                out.append(Entry(id: a.id, kind: k, slug: a.slug, usage: u))
+            }
+        }
+        return out
     }
 
     var body: some View {
-        if !kinds.isEmpty {
+        let entries = self.entries
+        if !entries.isEmpty {
             VStack(spacing: 8) {
                 Divider().overlay(Theme.hairline)
-                if kinds.count == 1, let k = kinds.first, let u = usage.usage[k] {
-                    fullRow(k, u)
+                if entries.count == 1, let e = entries.first {
+                    fullRow(e.kind, e.usage, slug: e.slug)
                 } else {
-                    // Several tools at once: just the 5-hour window each, side by side.
+                    // Several at once: just the 5-hour window each, side by side.
                     HStack(spacing: 14) {
-                        ForEach(kinds, id: \.self) { k in
-                            if let u = usage.usage[k] { compact(k, u) }
-                        }
+                        ForEach(entries) { e in compact(e.kind, e.usage, slug: e.slug) }
                         Spacer(minLength: 0)
                     }
                 }
@@ -100,11 +109,18 @@ struct UsageFooter: View {
         }
     }
 
+    private func logo(_ kind: AgentKind, slug: String?, size: CGFloat) -> some View {
+        HStack(spacing: 3) {
+            AgentLogo(kind: kind, size: size)
+            if let slug { Text(slug).font(.system(size: 10.5, weight: .medium)).foregroundStyle(Theme.tertiary).lineLimit(1) }
+        }
+    }
+
     /// One tool: 5-hour + week + reset.
     @ViewBuilder
-    private func fullRow(_ kind: AgentKind, _ u: UsageStore.Usage) -> some View {
+    private func fullRow(_ kind: AgentKind, _ u: UsageStore.Usage, slug: String?) -> some View {
         HStack(spacing: 12) {
-            AgentLogo(kind: kind, size: 16)
+            logo(kind, slug: slug, size: 16)
             if let short = u.short {
                 meter("5h", short, width: 46)
                 if let week = u.weekly { meter("Week", week, width: 46) }
@@ -122,9 +138,9 @@ struct UsageFooter: View {
 
     /// Several tools: logo, a short bar and what's left (or when it comes back).
     @ViewBuilder
-    private func compact(_ kind: AgentKind, _ u: UsageStore.Usage) -> some View {
+    private func compact(_ kind: AgentKind, _ u: UsageStore.Usage, slug: String?) -> some View {
         HStack(spacing: 6) {
-            AgentLogo(kind: kind, size: 15)
+            logo(kind, slug: slug, size: 15)
             if let short = u.short {
                 bar(short, width: 30)
                 Text(short.usedPercent >= 100 ? resetText(short).replacingOccurrences(of: "Back in ", with: "↺ ")

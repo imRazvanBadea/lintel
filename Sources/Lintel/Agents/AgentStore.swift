@@ -13,7 +13,7 @@ final class AgentStore {
     /// Development hooks (snapshot / expand), token-protected like everything else.
     @ObservationIgnored var debugHandler: ((String, HookServer.Responder) -> Void)?
     @ObservationIgnored private var server: HookServer?
-    @ObservationIgnored private var codex: CodexWatcher?
+    @ObservationIgnored private var codex: [CodexWatcher] = []
     @ObservationIgnored private var sweepTimer: Timer?
 
     var hasPendingRequests: Bool { pending.contains { $0.isBlocking } }
@@ -38,12 +38,16 @@ final class AgentStore {
         }
     }
 
+    /// One watcher per Codex home: the default one plus extra logins (~/.codex-work, …).
     private func updateCodex() {
         if Settings.shared.codexEnabled {
-            if codex == nil { codex = CodexWatcher(store: self); codex?.start() }
+            guard codex.isEmpty else { return }
+            let homes = [AgentHooks.codexHome] + Account.discover().filter { $0.kind == .codex }.map(\.dir)
+            codex = homes.map { CodexWatcher(store: self, home: $0) }
+            codex.forEach { $0.start() }
         } else {
-            codex?.stop()
-            codex = nil
+            codex.forEach { $0.stop() }
+            codex = []
             sessions.removeAll { $0.kind == .codex }
         }
     }

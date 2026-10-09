@@ -21,6 +21,15 @@ enum AgentHooks {
             case .codex: return AgentHooks.codexHome.appendingPathComponent("hooks.json")
             }
         }
+        /// The default config plus those of extra logins (~/.claude-work/settings.json, ~/.codex-work/hooks.json).
+        var configURLs: [URL] {
+            let extras = Account.discover().filter { $0.kind == kind }.map { a -> URL in
+                a.dir.appendingPathComponent(self == .claude ? "settings.json" : "hooks.json")
+            }
+            return [configURL] + (self == .cursor ? [] : extras)
+        }
+        var kind: AgentKind { self == .claude ? .claude : (self == .cursor ? .cursor : .codex) }
+
         /// Whether the agent seems to be installed at all.
         var isAvailable: Bool {
             let fm = FileManager.default
@@ -94,7 +103,11 @@ enum AgentHooks {
 
     static func install(_ t: Target) throws {
         try installHelper()
-        var root = try load(t)
+        for url in t.configURLs { try install(t, at: url) }
+    }
+
+    private static func install(_ t: Target, at url: URL) throws {
+        var root = try load(url)
         var hooks = root["hooks"] as? [String: Any] ?? [:]
         for (event, timeout) in t.events {
             var entries = stripped(hooks[event], target: t)
@@ -109,30 +122,32 @@ enum AgentHooks {
         }
         root["hooks"] = hooks
         if t == .cursor, root["version"] == nil { root["version"] = 1 }
-        if t == .codex { try enableCodexHooksFeature() }
+        if t == .codex { try enableCodexHooksFeature(home: url.deletingLastPathComponent()) }
         // Claude Code hands its status line command the plan usage (5-hour / weekly, with reset times).
         // Only claim the status line if you don't already have one; Lintel prints nothing, so it stays empty.
         if t == .claude, let sl = root["statusLine"] as? [String: Any], ((sl["command"] as? String) ?? "").contains(marker) {
             root.removeValue(forKey: "statusLine") // ours, from an older version — re-added below
         }
-        if t == .claude, root["statusLine"] == nil {
+        if t == .claude, url == t.configURL, root["statusLine"] == nil {
             root["statusLine"] = ["type": "command", "command": "\(helperURL.path) claude StatusLine", "padding": 0]
         }
-        try save(root, to: t)
+        try save(root, to: url)
     }
 
     static func uninstall(_ t: Target) throws {
-        var root = try load(t)
-        guard var hooks = root["hooks"] as? [String: Any] else { return }
-        for key in hooks.keys {
-            let entries = stripped(hooks[key], target: t)
-            if entries.isEmpty { hooks.removeValue(forKey: key) } else { hooks[key] = entries }
+        for url in t.configURLs where FileManager.default.fileExists(atPath: url.path) {
+            var root = try load(url)
+            guard var hooks = root["hooks"] as? [String: Any] else { continue }
+            for key in hooks.keys {
+                let entries = stripped(hooks[key], target: t)
+                if entries.isEmpty { hooks.removeValue(forKey: key) } else { hooks[key] = entries }
+            }
+            if hooks.isEmpty && t != .cursor { root.removeValue(forKey: "hooks") } else { root["hooks"] = hooks }
+            if let sl = root["statusLine"] as? [String: Any], ((sl["command"] as? String) ?? "").contains(marker) {
+                root.removeValue(forKey: "statusLine")
+            }
+            try save(root, to: url)
         }
-        if hooks.isEmpty && t != .cursor { root.removeValue(forKey: "hooks") } else { root["hooks"] = hooks }
-        if let sl = root["statusLine"] as? [String: Any], ((sl["command"] as? String) ?? "").contains(marker) {
-            root.removeValue(forKey: "statusLine")
-        }
-        try save(root, to: t)
     }
 
     /// Existing hook entries for an event, minus any Lintel ones.
@@ -157,8 +172,8 @@ enum AgentHooks {
     // MARK: Codex
 
     /// Codex only runs hooks with `hooks = true` under `[features]` in config.toml.
-    static func enableCodexHooksFeature() throws {
-        let url = codexHome.appendingPathComponent("config.toml")
+    static func enableCodexHooksFeature(home: URL = codexHome) throws {
+        let url = home.appendingPathComponent("config.toml")
         var text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         let lines = text.components(separatedBy: "\n")
         if let header = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("[features]") }) {
@@ -222,7 +237,7 @@ enum AgentHooks {
             p.executableURL = URL(fileURLWithPath: exe)
             p.arguments = ["app-server", "--stdio"]
             p.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
-            var env = ProcessInfo.processInfo.environment
+            var env = ProcessInfo.processInfo.environment.filter { k, _ in !(k.hasPrefix("CODEX_") || k.hasPrefix("CLAUDE")) }
             env["CODEX_HOME"] = codexHome.path
             p.environment = env
             let input = Pipe(), output = Pipe()
@@ -264,24 +279,28 @@ enum AgentHooks {
                 _ = done.wait(timeout: .now() + 8)
             } catch {}
             output.fileHandleForReading.readabilityHandler = nil
-            if p.isRunning { p.terminate() }
+            try? input.fileHandleForWriting.close()
+            if p.isRunning {
+                p.terminate()
+                let pid = p.processIdentifier
+                DispatchQueue.global().asyncAfter(deadline: .now() + 2) { if kill(pid, 0) == 0 { kill(pid, SIGKILL) } }
+            }
             completion(result)
         }
     }
 
-    private static func load(_ t: Target) throws -> [String: Any] {
-        guard FileManager.default.fileExists(atPath: t.configURL.path) else { return [:] }
-        let data = try Data(contentsOf: t.configURL)
+    private static func load(_ url: URL) throws -> [String: Any] {
+        guard FileManager.default.fileExists(atPath: url.path) else { return [:] }
+        let data = try Data(contentsOf: url)
         if data.isEmpty { return [:] }
         guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw NSError(domain: "Lintel", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(t.configURL.path) is not a JSON object — not touching it."])
+            throw NSError(domain: "Lintel", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(url.path) is not a JSON object — not touching it."])
         }
         return obj
     }
 
-    private static func save(_ root: [String: Any], to t: Target) throws {
+    private static func save(_ root: [String: Any], to url: URL) throws {
         let fm = FileManager.default
-        let url = t.configURL
         try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let backup = url.appendingPathExtension("lintel-backup")
         if fm.fileExists(atPath: url.path) {

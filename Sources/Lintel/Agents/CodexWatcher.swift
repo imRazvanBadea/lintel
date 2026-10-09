@@ -7,8 +7,8 @@ import CoreServices
 final class CodexWatcher {
     private weak var store: AgentStore?
     /// Honours CODEX_HOME like Codex itself does.
-    private let root = ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
-        ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
+    /// The Codex home this watcher follows (~/.codex, or an extra login such as ~/.codex-work).
+    private let root: URL
     private var sessionsDir: URL { root.appendingPathComponent("sessions") }
     private var indexURL: URL { root.appendingPathComponent("session_index.jsonl") }
 
@@ -23,7 +23,10 @@ final class CodexWatcher {
     /// Only sessions touched this recently are shown.
     private var liveWindow: TimeInterval { AgentStore.keepAlive }
 
-    init(store: AgentStore) { self.store = store }
+    init(store: AgentStore, home: URL = AgentHooks.codexHome) {
+        self.store = store
+        self.root = home
+    }
 
     func start() {
         loadTitles()

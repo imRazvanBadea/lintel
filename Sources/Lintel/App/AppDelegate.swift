@@ -72,6 +72,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 IslandModel.shared.expand(.agents, pinned: true)
             case _ where cmd.hasPrefix("connect-"):
                 if let t = AgentHooks.Target(rawValue: String(cmd.dropFirst(8))) { try? AgentHooks.install(t) }
+            case "probe-claude":
+                UsageStore.shared.probeClaude(minInterval: 0)
+            case "probe-extra":
+                UsageStore.shared.probeExtraAccounts(force: true)
             case "usage-summary":
                 let s = UsageHistory.shared.summary(.month)
                 let obj: [String: Any] = ["cost": s.cost, "sessions": s.sessions, "input": s.totals.input, "output": s.totals.output,
@@ -101,6 +105,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     "pending": st.pending.map { ["session": $0.sessionID, "blocking": $0.isBlocking] },
                     "music": NowPlaying.shared.state.map { "\($0.track.title) — \($0.track.artist) playing=\($0.isPlaying) app=\($0.appBundleID) next=\($0.upNext.map(\.title))" } ?? "none",
                     "musicSource": NowPlaying.shared.sourceLabel,
+                    "usage": UsageStore.shared.usage.map { "\($0.key.label): \(Int($0.value.short?.usedPercent ?? -1))% / \(Int($0.value.weekly?.usedPercent ?? -1))%\($0.value.short?.estimated == true ? " (estimated)" : "")" },
+                    "extraAccounts": UsageStore.shared.extraUsage.map { "\($0.key.label): \(Int($0.value.short?.usedPercent ?? -1))% / \(Int($0.value.weekly?.usedPercent ?? -1))%" },
                     "musicHint": NowPlaying.shared.hint ?? "",
                 ]
                 let data = (try? JSONSerialization.data(withJSONObject: obj, options: .prettyPrinted)) ?? Data()
@@ -247,3 +253,4 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.runModal()
     }
 }
+
