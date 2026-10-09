@@ -31,12 +31,15 @@ final class UsageStore {
     @ObservationIgnored private var lastExact = Date.distantPast
     @ObservationIgnored private var lastProbe = Date.distantPast
     @ObservationIgnored private var probe: Process?
+    @ObservationIgnored private var probeAnswered = false
+    @ObservationIgnored private var probeFailures = 0
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private let claudeLog = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/Claude/plan-usage-history.json")
     @ObservationIgnored private var claudeLogModified = Date.distantPast
 
     func start() {
+        probeClaude(minInterval: 0)
         refreshLocal()
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshLocal() }
@@ -47,7 +50,8 @@ final class UsageStore {
     private func refreshLocal() {
         // Exact numbers while Claude is in use; the app's log only when we have nothing better.
         if AgentStore.shared.sessions.contains(where: { $0.kind == .claude }) { probeClaude(minInterval: 170) }
-        if Date().timeIntervalSince(lastExact) > 15 * 60 { readClaudeAppLog() }
+        // The app's 15-minute log is only a fallback for when Claude Code can't be asked.
+        if (Self.claudeExecutable() == nil || probeFailures > 0), Date().timeIntervalSince(lastExact) > 15 * 60 { readClaudeAppLog() }
         if usage[.cursor]?.plan == nil, let plan = Self.cursorPlan() {
             usage[.cursor] = Usage(plan: plan.capitalized, note: "Usage is shown in Cursor's dashboard")
         }
@@ -90,6 +94,7 @@ final class UsageStore {
     func probeClaude(minInterval: TimeInterval = 60) {
         guard probe == nil, Date().timeIntervalSince(lastProbe) > minInterval, let exe = Self.claudeExecutable() else { return }
         lastProbe = Date()
+        probeAnswered = false
         let dir = AgentHooks.dir.appendingPathComponent("probe")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
@@ -115,6 +120,8 @@ final class UsageStore {
                       let resp = (d["response"] as? [String: Any])?["response"] as? [String: Any] else { continue }
                 h.readabilityHandler = nil
                 DispatchQueue.main.async {
+                    self?.probeAnswered = true
+                    self?.probeFailures = 0
                     self?.applyClaudeUsage(resp)
                     self?.finishProbe()
                 }
@@ -134,6 +141,7 @@ final class UsageStore {
 
     private func finishProbe() {
         guard let p = probe else { return }
+        if !probeAnswered { probeFailures += 1; refreshLocal() }
         if p.isRunning { p.terminate() }
         probe = nil
     }

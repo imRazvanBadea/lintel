@@ -35,6 +35,7 @@ struct RootView: View {
 // MARK: - Notch
 
 struct NotchBar: View {
+    @Environment(Settings.self) private var settings
     @Environment(IslandModel.self) private var model
     @Environment(AgentStore.self) private var store
     @Environment(NowPlaying.self) private var music
@@ -42,20 +43,43 @@ struct NotchBar: View {
     private let ear: CGFloat = 7
     private var inset: CGFloat { ear + (wing > 0 ? 8 : 0) }
 
+    /// In Minimal style the wings stay tucked into the notch until there's a reason to show them,
+    /// so the menu bar icons beside the notch are never covered.
+    private var wingsOut: Bool {
+        settings.notchStyle == .wings || model.expanded != nil || model.hoveringBar || model.peeking
+            || store.hasPendingRequests || !store.needsYou.isEmpty
+    }
+
     /// Both wings share one width so the hardware notch stays centred.
     private var wing: CGFloat {
+        guard wingsOut else { return 0 }
         let attention = store.hasPendingRequests || !store.needsYou.isEmpty
         if attention { return 118 }
-        if store.sessions.isEmpty && music.state == nil { return model.expanded == nil ? 0 : 44 }
+        if store.sessions.isEmpty && music.state == nil { return 44 }
         return model.expanded == nil ? 64 : 76
+    }
+
+    /// While tucked in: a hairline under the notch that says "working" (agent colour) or "needs you" (amber).
+    @ViewBuilder
+    private var statusLine: some View {
+        let color: Color? = !store.needsYou.isEmpty ? Theme.amber : store.working.first?.tint
+        if !wingsOut, let color {
+            Capsule()
+                .fill(LinearGradient(colors: [color.opacity(0), color, color.opacity(0)], startPoint: .leading, endPoint: .trailing))
+                .frame(width: model.notchWidth * 0.7, height: 2.5)
+                .shadow(color: color.opacity(0.8), radius: 3)
+                .offset(y: model.menuBarHeight + 1.5)
+                .transition(.opacity)
+                .allowsHitTesting(false)
+        }
     }
 
     var body: some View {
         let h = model.menuBarHeight
         HStack(spacing: 0) {
-            AgentWing(height: h).frame(width: wing, alignment: .leading)
+            AgentWing(height: h).frame(width: wing, alignment: .leading).clipped().opacity(wing > 0 ? 1 : 0)
             Color.clear.frame(width: model.notchWidth)
-            MusicWing(height: h).frame(width: wing, alignment: .trailing)
+            MusicWing(height: h).frame(width: wing, alignment: .trailing).clipped().opacity(wing > 0 ? 1 : 0)
         }
         .padding(.horizontal, inset)
         .frame(height: h)
@@ -73,6 +97,8 @@ struct NotchBar: View {
         }
         .animation(.spring(response: 0.4, dampingFraction: 0.82), value: wing)
         .clipped()
+        .overlay(alignment: .top) { statusLine }
+        .animation(.easeInOut(duration: 0.3), value: wingsOut)
     }
 }
 

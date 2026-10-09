@@ -169,6 +169,11 @@ final class NotchController {
         let overCard = !card.isEmpty && card.contains(p)
         let inside = overAgent || overMusic || overCard
 
+        let overBar = overAgent || overMusic
+        if overBar != model.hoveringBar {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { model.hoveringBar = overBar }
+        }
+
         if inside != lastInside {
             panel.ignoresMouseEvents = !inside
             lastInside = inside

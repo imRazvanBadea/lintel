@@ -34,6 +34,17 @@ final class TitleResolver: @unchecked Sendable {
 
     // MARK: Claude desktop
 
+    /// The Claude app's own id for a Claude Code session ("local_…"), used by its claude://code/continue link.
+    func claudeDesktopSessionID(for cliID: String, completion: @escaping @Sendable (String?) -> Void) {
+        queue.async {
+            if self.claudeIndex[cliID] == nil { self.indexClaude() }
+            guard let url = self.claudeIndex[cliID],
+                  let data = try? Data(contentsOf: url),
+                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { completion(nil); return }
+            completion(obj["sessionId"] as? String)
+        }
+    }
+
     private func claudeTitle(_ id: String) -> String? {
         if claudeIndex[id] == nil, Date().timeIntervalSince(lastIndexed) > 10 { indexClaude() }
         guard let url = claudeIndex[id],

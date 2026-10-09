@@ -115,25 +115,88 @@ final class AgentStore {
 
     // MARK: Focus
 
-    /// Brings the terminal / editor / desktop app that hosts the session to the front.
+    /// Takes you to the session itself: the exact Claude app chat, Codex thread or terminal tab when possible,
+    /// otherwise the app that hosts it.
     func reveal(_ s: AgentSession) {
-        if s.kind == .codex {
-            if let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.codex").first {
-                app.activate()
-            } else if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex") {
-                NSWorkspace.shared.openApplication(at: url, configuration: .init())
+        switch s.kind {
+        case .codex:
+            if let url = URL(string: "codex://threads/\(s.id)") { NSWorkspace.shared.open(url) }
+            return
+        case .cursor:
+            NowPlaying.activate(bundleID: Self.cursorBundleID)
+            return
+        case .claude:
+            break
+        }
+        let pid = s.agentPID ?? s.hookPPID
+        let host = pid.flatMap { Proc.hostingApp(of: $0) }
+        // A session in the Claude app: open that very chat.
+        if host?.bundleIdentifier == "com.anthropic.claudefordesktop" || host == nil {
+            let id = s.id
+            TitleResolver.shared.claudeDesktopSessionID(for: id) { local in
+                DispatchQueue.main.async {
+                    if let local, let url = URL(string: "claude://code/continue?session=\(local)&source=spotlight") {
+                        NSWorkspace.shared.open(url)
+                    } else {
+                        AgentStore.shared.focusTerminal(s, host: host)
+                    }
+                }
             }
             return
         }
-        if s.kind == .cursor {
-            if let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.todesktop.230313mzl4w4u92").first { app.activate() }
-            return
+        focusTerminal(s, host: host)
+    }
+
+    /// Terminal / iTerm: select the tab running the session (matched by its tty). Others: bring the app forward.
+    fileprivate func focusTerminal(_ s: AgentSession, host: NSRunningApplication?) {
+        let bundle = host?.bundleIdentifier ?? Self.bundleForTerm(s.termProgram)
+        if let pid = s.agentPID, let tty = Proc.tty(of: pid), let bundle {
+            let script: String?
+            switch bundle {
+            case "com.apple.Terminal":
+                script = """
+                tell application "Terminal"
+                    repeat with w in windows
+                        repeat with t in tabs of w
+                            if tty of t is "\(tty)" then
+                                set selected tab of w to t
+                                set index of w to 1
+                            end if
+                        end repeat
+                    end repeat
+                    activate
+                end tell
+                """
+            case "com.googlecode.iterm2":
+                script = """
+                tell application "iTerm2"
+                    repeat with w in windows
+                        repeat with t in tabs of w
+                            repeat with ss in sessions of t
+                                if tty of ss is "\(tty)" then
+                                    select w
+                                    tell t to select
+                                    tell ss to select
+                                end if
+                            end repeat
+                        end repeat
+                    end repeat
+                    activate
+                end tell
+                """
+            default:
+                script = nil
+            }
+            if let script {
+                ScriptRunner.shared.run(script) { _ in }
+                return
+            }
         }
-        if let pid = s.agentPID ?? s.hookPPID, let app = Proc.hostingApp(of: pid) {
-            app.activate()
-            return
-        }
-        let bundle: String? = switch s.termProgram {
+        if let bundle { NowPlaying.activate(bundleID: bundle) } else { host?.activate() }
+    }
+
+    private static func bundleForTerm(_ term: String) -> String? {
+        switch term {
         case "Apple_Terminal": "com.apple.Terminal"
         case "iTerm.app": "com.googlecode.iterm2"
         case "vscode": "com.microsoft.VSCode"
@@ -141,7 +204,6 @@ final class AgentStore {
         case "WarpTerminal": "dev.warp.Warp-Stable"
         default: nil
         }
-        if let bundle, let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first { app.activate() }
     }
 
     // MARK: Claude Code hook events

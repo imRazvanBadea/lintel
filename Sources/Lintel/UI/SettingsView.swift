@@ -62,6 +62,9 @@ struct SettingsView: View {
                     ForEach(AppearanceChoice.allCases) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.segmented)
+                Picker("On a notched display", selection: $s.notchStyle) {
+                    ForEach(NotchStyle.allCases) { Text($0.label).tag($0) }
+                }
                 Picker("Show on", selection: $s.display) {
                     ForEach(DisplayChoice.allCases) { Text($0.label).tag($0) }
                 }

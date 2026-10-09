@@ -148,7 +148,10 @@ final class NowPlaying {
             // New track without artwork yet; ask the bridge to resend once it's available.
             artwork = nil
         }
-        if trackChanged { web.read(bundleID: s.bundleID) }
+        if trackChanged {
+            web.read(bundleID: s.bundleID)
+            if s.playing { IslandModel.shared.peek() }
+        }
         updateWebPolling()
     }
 

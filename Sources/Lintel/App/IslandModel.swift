@@ -14,6 +14,21 @@ final class IslandModel {
     var selectedSessionID: String?
     /// Set by the back button: show the session list instead of the latest "Finished" card.
     var showingList = false
+    /// The pointer is over the notch bar (Minimal notch style shows the wings only then).
+    var hoveringBar = false
+    /// Wings pop out briefly for events (new song, finished turn) in Minimal style.
+    var peeking = false
+    @ObservationIgnored private var peekWork: DispatchWorkItem?
+
+    func peek(for seconds: Double = 4) {
+        peekWork?.cancel()
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) { peeking = true }
+        let w = DispatchWorkItem { [weak self] in
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) { self?.peeking = false }
+        }
+        peekWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: w)
+    }
 
     // Geometry of the screen the panel is on.
     var menuBarHeight: CGFloat = 24

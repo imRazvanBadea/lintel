@@ -14,6 +14,17 @@ enum Proc {
         return (kinfo.kp_eproc.e_ppid, name)
     }
 
+    /// The terminal device a process is attached to, e.g. "/dev/ttys003".
+    static func tty(of pid: pid_t) -> String? {
+        var kinfo = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, 4, &kinfo, &size, nil, 0) == 0, size > 0 else { return nil }
+        let dev = kinfo.kp_eproc.e_tdev
+        guard dev != -1, let name = devname(dev, S_IFCHR) else { return nil }
+        return "/dev/" + String(cString: name)
+    }
+
     static func isAlive(_ pid: pid_t) -> Bool {
         pid > 0 && (kill(pid, 0) == 0 || errno == EPERM)
     }

@@ -14,6 +14,12 @@ enum DisplayChoice: String, CaseIterable, Identifiable {
     }
 }
 
+enum NotchStyle: String, CaseIterable, Identifiable {
+    case minimal, wings
+    var id: String { rawValue }
+    var label: String { self == .minimal ? "Minimal (pops out on hover)" : "Always show wings" }
+}
+
 enum AppearanceChoice: String, CaseIterable, Identifiable {
     case system, light, dark
     var id: String { rawValue }
@@ -38,6 +44,8 @@ final class Settings {
     /// Hold Cursor's shell commands until you approve them in the notch (Cursor's own allowlist still applies after).
     var cursorShellApprovals: Bool { didSet { d.set(cursorShellApprovals, forKey: "cursorShellApprovals") } }
     var musicEnabled: Bool { didSet { d.set(musicEnabled, forKey: "musicEnabled") } }
+    /// How the notch looks at rest on a notched display. Minimal keeps the menu bar beside the notch free.
+    var notchStyle: NotchStyle { didSet { d.set(notchStyle.rawValue, forKey: "notchStyle") } }
     var showMenuBarIcon: Bool { didSet { d.set(showMenuBarIcon, forKey: "showMenuBarIcon"); onMenuBarIconChange?() } }
     var showUpNext: Bool { didSet { d.set(showUpNext, forKey: "showUpNext") } }
 
@@ -76,6 +84,7 @@ final class Settings {
             "cursorShellApprovals": false,
             "showUpNext": true,
             "showMenuBarIcon": true,
+            "notchStyle": NotchStyle.minimal.rawValue,
         ])
         appearance = AppearanceChoice(rawValue: d.string(forKey: "appearance") ?? "") ?? .system
         display = DisplayChoice(rawValue: d.string(forKey: "display2") ?? "") ?? .follow
@@ -88,5 +97,6 @@ final class Settings {
         cursorShellApprovals = d.bool(forKey: "cursorShellApprovals")
         showUpNext = d.bool(forKey: "showUpNext")
         showMenuBarIcon = d.bool(forKey: "showMenuBarIcon")
+        notchStyle = NotchStyle(rawValue: d.string(forKey: "notchStyle") ?? "") ?? .minimal
     }
 }
