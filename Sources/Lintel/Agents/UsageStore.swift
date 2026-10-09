@@ -73,6 +73,7 @@ final class UsageStore {
 
     /// From Claude Code's status line JSON: rate_limits.{five_hour, seven_day}.{used_percentage, resets_at}
     func applyClaudeStatusLine(_ json: [String: Any]) {
+        guard Date() > demoUntil else { return }
         guard let limits = json["rate_limits"] as? [String: Any] else { return }
         func window(_ key: String) -> Window? {
             guard let w = limits[key] as? [String: Any] else { return nil }
@@ -86,6 +87,19 @@ final class UsageStore {
         u.note = nil
         lastExact = Date()
         if u != usage[.claude] { usage[.claude] = u }
+    }
+
+    @ObservationIgnored private var demoUntil = Date.distantPast
+
+    /// Developer demo: plausible numbers for screenshots.
+    func showDemo() {
+        demoUntil = Date().addingTimeInterval(30)
+        usage[.claude] = Usage(short: Window(usedPercent: 38, resetsAt: Date().addingTimeInterval(2 * 3600 + 14 * 60)),
+                               weekly: Window(usedPercent: 21, resetsAt: nil), plan: "Pro")
+        usage[.cursor] = Usage(plan: "Pro")
+        usage[.codex] = Usage(short: Window(usedPercent: 12, resetsAt: Date().addingTimeInterval(4 * 3600)),
+                              weekly: Window(usedPercent: 9, resetsAt: nil), plan: "Plus")
+        lastExact = Date().addingTimeInterval(3600)
     }
 
     // MARK: Claude — ask Claude Code
@@ -107,14 +121,11 @@ final class UsageStore {
         p.standardInput = input
         p.standardOutput = output
         p.standardError = FileHandle.nullDevice
-        var buffer = Data()
+        let buffer = LineBuffer()
         output.fileHandleForReading.readabilityHandler = { [weak self] h in
             let chunk = h.availableData
             if chunk.isEmpty { return }
-            buffer.append(chunk)
-            while let nl = buffer.firstIndex(of: UInt8(ascii: "\n")) {
-                let line = buffer[buffer.startIndex..<nl]
-                buffer.removeSubrange(buffer.startIndex...nl)
+            for line in buffer.append(chunk) {
                 guard let d = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
                       d["type"] as? String == "control_response",
                       let resp = (d["response"] as? [String: Any])?["response"] as? [String: Any] else { continue }
@@ -246,5 +257,20 @@ final class UsageStore {
             return f.date(from: s)
         }
         return nil
+    }
+}
+
+/// Accumulates bytes from a pipe and hands back complete lines (used from the pipe's own queue only).
+final class LineBuffer: @unchecked Sendable {
+    private var data = Data()
+
+    func append(_ chunk: Data) -> [Data] {
+        data.append(chunk)
+        var lines: [Data] = []
+        while let nl = data.firstIndex(of: UInt8(ascii: "\n")) {
+            lines.append(Data(data[data.startIndex..<nl]))
+            data.removeSubrange(data.startIndex...nl)
+        }
+        return lines
     }
 }

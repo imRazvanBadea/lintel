@@ -73,29 +73,33 @@ final class NotchController {
             return e
         } as Any)
         monitors.append(NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
-            MainActor.assumeIsolated { self?.keyDown(e) ?? e }
+            nonisolated(unsafe) let event = e
+            let consumed = MainActor.assumeIsolated { self?.handleKey(event) ?? false }
+            return consumed ? nil : e
         } as Any)
     }
 
-    /// Renders the panel to a PNG (used while developing the UI).
-    func snapshot(to path: String) {
+    /// Renders the panel to a PNG (developer tool). `transparent` keeps the alpha for compositing.
+    func snapshot(to path: String, transparent: Bool = false) {
         guard let view = panel.contentView else { return }
         let bounds = view.bounds
         guard let rep = view.bitmapImageRepForCachingDisplay(in: bounds) else { return }
         view.cacheDisplay(in: bounds, to: rep)
-        // Put it on a desktop-like background so the islands are visible.
-        let out = NSImage(size: bounds.size)
-        out.lockFocus()
-        NSColor(white: 0.93, alpha: 1).setFill()
-        bounds.fill()
-        NSImage(cgImage: rep.cgImage!, size: bounds.size).draw(in: bounds)
-        out.unlockFocus()
-        if let tiff = out.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
-            try? png.write(to: URL(fileURLWithPath: path))
+        let png: Data?
+        if transparent {
+            png = rep.representation(using: .png, properties: [:])
+        } else {
+            // On a desktop-like background so the islands are visible.
+            let out = NSImage(size: bounds.size)
+            out.lockFocus()
+            NSColor(white: 0.93, alpha: 1).setFill()
+            bounds.fill()
+            NSImage(cgImage: rep.cgImage!, size: bounds.size).draw(in: bounds)
+            out.unlockFocus()
+            png = out.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) }
         }
+        try? png?.write(to: URL(fileURLWithPath: path))
     }
-
-    // MARK: Placement
 
     /// The display chosen by "follow": starts on the main display, then moves to whichever display you click on.
     private var followedScreenID: CGDirectDisplayID?
@@ -209,11 +213,12 @@ final class NotchController {
         NSWorkspace.shared.frontmostApplication?.activate()
     }
 
-    private func keyDown(_ e: NSEvent) -> NSEvent? {
-        guard e.window === panel else { return e }
+    /// Returns true when the key was handled here.
+    private func handleKey(_ e: NSEvent) -> Bool {
+        guard e.window === panel else { return false }
         if e.keyCode == 53 { // esc
             if model.selectedSessionID != nil { model.selectedSessionID = nil } else { model.collapse() }
-            return nil
+            return true
         }
         if e.modifierFlags.contains(.command), let c = e.charactersIgnoringModifiers, let n = Int(c), (1...9).contains(n) {
             let sessions = AgentStore.shared.sessions
@@ -221,8 +226,8 @@ final class NotchController {
                 AgentStore.shared.reveal(sessions[n - 1])
                 model.collapse()
             }
-            return nil
+            return true
         }
-        return e
+        return false
     }
 }

@@ -45,6 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case "music": IslandModel.shared.expand(.music, pinned: true)
             case "collapse": IslandModel.shared.collapse()
             case "snapshot": self?.notch.snapshot(to: NSTemporaryDirectory() + "lintel-snapshot.png")
+            case "snapshot-clear": self?.notch.snapshot(to: NSTemporaryDirectory() + "lintel-snapshot.png", transparent: true)
             case "allow", "always", "deny", "answer", "reply":
                 let store = AgentStore.shared
                 if let p = store.pending.first(where: { cmd == "reply" ? !$0.isBlocking : $0.isBlocking }) {
@@ -57,6 +58,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     default: break
                     }
                 }
+            case "demo":
+                AgentStore.shared.showDemo()
+                NowPlaying.shared.showDemo()
+                IslandModel.shared.collapse()
+            case "demo-permission", "demo-question":
+                AgentStore.shared.showDemoPrompt(String(cmd.dropFirst(5)))
+                IslandModel.shared.expand(.agents, pinned: true)
             case _ where cmd.hasPrefix("theme-"):
                 Settings.shared.appearance = AppearanceChoice(rawValue: String(cmd.dropFirst(6))) ?? .system
             case _ where cmd.hasPrefix("display-"):

@@ -33,6 +33,8 @@ enum AgentHooks {
     static let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".lintel")
     static let scriptURL = dir.appendingPathComponent("hook.sh")
     static let tokenURL = dir.appendingPathComponent("token")
+    /// The token as a ready-made HTTP header, read by curl from disk so it never appears in `ps` output.
+    static let tokenHeaderURL = dir.appendingPathComponent("token-header")
     static let marker = ".lintel/"
 
     static let script = """
@@ -40,13 +42,13 @@ enum AgentHooks {
     # Lintel bridge for agent hooks: hook.sh <claude|cursor> <event>
     # Fails open: if Lintel is not running, nothing changes.
     AGENT="$1"; EVENT="$2"
-    TOKEN=$(cat "$HOME/.lintel/token" 2>/dev/null) || exit 0
+    [ -r "$HOME/.lintel/token-header" ] || exit 0
     case "$EVENT" in
       PermissionRequest|Stop|stop|beforeShellExecution) MAX=86400 ;;
       *) MAX=2 ;;
     esac
     /usr/bin/curl -s --max-time "$MAX" -X POST \\
-      -H "X-Lintel-Token: $TOKEN" -H "X-Lintel-PPID: $PPID" -H "X-Lintel-Term: ${TERM_PROGRAM:-}" \\
+      -H @"$HOME/.lintel/token-header" -H "X-Lintel-PPID: $PPID" -H "X-Lintel-Term: ${TERM_PROGRAM:-}" \\
       -H "Content-Type: application/json" --data-binary @- \\
       "http://127.0.0.1:\(HookServer.port)/$AGENT/$EVENT" 2>/dev/null
     exit 0
@@ -55,13 +57,22 @@ enum AgentHooks {
     /// Shared secret so other local processes can't drive the notch.
     static func token() -> String {
         if let t = try? String(contentsOf: tokenURL, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
+            writeTokenHeader(t)
             return t
         }
         let t = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try? t.write(to: tokenURL, atomically: true, encoding: .utf8)
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tokenURL.path)
+        writeTokenHeader(t)
         return t
+    }
+
+    private static func writeTokenHeader(_ t: String) {
+        let line = "X-Lintel-Token: \(t)\n"
+        if (try? String(contentsOf: tokenHeaderURL, encoding: .utf8)) == line { return }
+        try? line.write(to: tokenHeaderURL, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tokenHeaderURL.path)
     }
 
     static func isInstalled(_ t: Target) -> Bool {

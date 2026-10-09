@@ -119,7 +119,32 @@ final class NowPlaying {
 
     // MARK: Updates
 
+    /// Developer demo (README screenshots): show a made-up track and ignore the real player for a while.
+    @ObservationIgnored private var demoUntil = Date.distantPast
+    func showDemo(seconds: Double = 30) {
+        demoUntil = Date().addingTimeInterval(seconds)
+        let size = NSSize(width: 300, height: 300)
+        let art = NSImage(size: size, flipped: false) { r in
+            NSGradient(colors: [NSColor(srgbRed: 0.98, green: 0.45, blue: 0.35, alpha: 1),
+                                NSColor(srgbRed: 0.45, green: 0.25, blue: 0.85, alpha: 1)])!.draw(in: r, angle: -55)
+            return true
+        }
+        state = PlayerState(track: Track(title: "Golden Hour", artist: "Demo Artist", album: "Lintel Sessions"),
+                            isPlaying: true, position: 74, duration: 214,
+                            upNext: [Track(title: "Night Drive", artist: "The Placeholders"),
+                                     Track(title: "Paper Planes", artist: "Sample Band"),
+                                     Track(title: "Low Tide", artist: "Demo Artist"),
+                                     Track(title: "Satellites", artist: "Example & Co")],
+                            appBundleID: "com.apple.Music", updatedAt: Date())
+        artwork = art
+        tint = art.averageColor?.vivid ?? .systemPink
+        appName = "Music"
+        sourceLabel = "Music"
+        hint = nil
+    }
+
     private func apply(_ s: NowPlayingBridge.Snapshot?) {
+        guard Date() > demoUntil else { return }
         guard Settings.shared.musicEnabled, let s, !s.title.isEmpty else {
             if state != nil { state = nil; artwork = nil }
             updateWebPolling()

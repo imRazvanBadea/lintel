@@ -62,12 +62,12 @@ final class AgentStore {
     func existing(_ id: String) -> AgentSession? { sessions.first { $0.id == id } }
 
     func remove(_ id: String) {
-        for p in pending where p.sessionID == id { p.resolve("") }
+        // Hand anything still open back to the agent's own UI (for Cursor, "ask" — never an implicit allow).
+        for p in pending where p.sessionID == id { p.resolve(p.deferPayload) }
         pending.removeAll { $0.sessionID == id }
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { sessions.removeAll { $0.id == id } }
     }
 
-    /// Drops sessions whose process went away, and quiets stale ones.
     /// How long a session stays in the list after its last activity (finished ones included).
     static let keepAlive: TimeInterval = 60 * 60
 
@@ -211,6 +211,7 @@ final class AgentStore {
     private func handle(_ req: HookServer.Request, _ responder: HookServer.Responder) {
         let parts = req.path.split(separator: "/")
         if parts.count == 2, parts[0] == "debug" { debugHandler?(String(parts[1]), responder); return }
+        if Date() < demoUntil { responder.respond(parts.first == "cursor" ? "{}" : ""); return }
         if parts.count == 2, parts[0] == "cursor" { handleCursor(String(parts[1]), req, responder); return }
         guard parts.count == 2, parts[0] == "claude" else { responder.respond(""); return }
         guard let json = (try? JSONSerialization.jsonObject(with: req.body)) as? [String: Any],
@@ -537,6 +538,59 @@ final class AgentStore {
     private static func permissionPayload(_ decision: [String: Any]) -> String {
         let obj: [String: Any] = ["hookSpecificOutput": ["hookEventName": "PermissionRequest", "decision": decision]]
         return (try? JSONSerialization.data(withJSONObject: obj)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+    }
+
+    // MARK: Demo (developer tool for README screenshots)
+
+    @ObservationIgnored private var demoUntil = Date.distantPast
+
+    /// Replaces the list with made-up sessions and ignores real hook events for a while.
+    func showDemo(seconds: Double = 30) {
+        demoUntil = Date().addingTimeInterval(seconds)
+        for p in pending { p.resolve(p.deferPayload) }
+        pending.removeAll()
+        sessions.removeAll()
+        func make(_ id: String, _ kind: AgentKind, _ title: String, _ cwd: String, _ status: AgentStatus, _ phase: Phase,
+                  tools: [(String, String, Int)] = [], tokens: Int = 0, model: String = "") -> AgentSession {
+            let s = session(id: id, kind: kind)
+            s.generatedTitle = title
+            s.cwd = cwd
+            s.branch = "main"
+            s.status = status
+            s.phase = phase
+            s.turnStartedAt = Date().addingTimeInterval(-112)
+            s.tokens = tokens
+            s.model = model
+            for (n, d, c) in tools { for _ in 0..<c { s.recordTool(n, detail: d) } }
+            s.phase = phase
+            return s
+        }
+        _ = make("demo-1", .claude, "Fix flaky websocket reconnect", "/Users/you/api", .working, .reviewing,
+                 tools: [("Read", "reconnect.test.ts", 5), ("Edit", "ws.ts", 12), ("Bash", "pnpm vitest run ws", 3)],
+                 tokens: 48_000, model: "opus")
+        _ = make("demo-2", .cursor, "Landing page hero polish", "/Users/you/web", .working, .writing,
+                 tools: [("Write", "Hero.tsx", 4)], tokens: 21_000, model: "sonnet")
+        let done = make("demo-3", .claude, "Write the changelog", "/Users/you/docs", .finished, .reviewing, tokens: 9_000, model: "sonnet")
+        done.lastMessage = "Added a 1.2.0 entry covering the reconnect fix and the new settings screen."
+        done.turnEndedAt = Date()
+        _ = make("demo-4", .codex, "Refactor the payments store", "/Users/you/shop", .idle, .reasoning)
+        UsageStore.shared.showDemo()
+    }
+
+    /// Adds a demo prompt for a screenshot: "permission" or "question".
+    func showDemoPrompt(_ kind: String) {
+        demoUntil = Date().addingTimeInterval(30)
+        guard let s = existing("demo-1") else { return }
+        let k: PendingRequest.Kind = kind == "question"
+            ? .question([QuestionSpec(question: "Which reconnect strategy should I use?", header: "Strategy",
+                                      options: [.init(label: "Exponential backoff", description: "Retry with growing delays, capped at 30s"),
+                                                .init(label: "Fixed interval", description: "Retry every 2 seconds")],
+                                      multiSelect: false)])
+            : .permission(tool: "Bash", detail: "git push origin fix/ws-reconnect", description: "Push the branch", canAlwaysAllow: true)
+        let p = PendingRequest(sessionID: s.id, kind: k) { _ in }
+        p.deferPayload = ""
+        s.status = .waiting
+        withAnimation { pending.append(p) }
     }
 
     // MARK: Helpers
