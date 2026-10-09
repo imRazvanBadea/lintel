@@ -203,7 +203,9 @@ struct UsageDashboard: View {
         .font(.system(size: 12))
         .padding(.horizontal, 10).padding(.vertical, 8)
         .frame(minWidth: 150)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.raised))
+        // Opaque, so the chart lines don't show through.
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(Theme.dynamic(light: .white, dark: NSColor(white: 0.16, alpha: 1))))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.hairline))
         .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
         .fixedSize()
@@ -219,7 +221,7 @@ struct UsageDashboard: View {
                     Text(t.tool.label).font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.primary)
                     Text("\(t.sessions) sessions").font(.system(size: 11.5)).foregroundStyle(Theme.tertiary)
                 }
-                Text("\(percent(share)) of \(showCost ? "cost" : "tokens") · " + (showCost ? "\(formatTokens(t.tokens)) tokens" : money(t.cost)))
+                Text("\(percent(share)) of \(showCost ? "cost" : "tokens") · " + (showCost ? "\(formatTokens(t.tokens)) tokens" : (t.cost == 0 && t.unpricedTokens > 0 ? "unpriced" : money(t.cost))))
                     .font(.system(size: 11.5)).foregroundStyle(Theme.tertiary)
             }
             Spacer()

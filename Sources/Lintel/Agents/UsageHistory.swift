@@ -299,8 +299,58 @@ final class UsageHistory {
 
     // MARK: Queries
 
+    /// Made-up history for README screenshots (`simulate.sh debug demo`).
+    private var demoUntil = Date.distantPast
+    func showDemo(seconds: Double = 30) { demoUntil = Date().addingTimeInterval(seconds); revision += 1 }
+
+    private func demoSummary(_ range: Range) -> Summary {
+        var s = Summary()
+        let cal = Calendar.current
+        let now = Date()
+        let count = Int(range.seconds / range.step)
+        var slot = range == .day ? cal.dateInterval(of: .hour, for: now.addingTimeInterval(-range.seconds))!.start
+                                 : cal.startOfDay(for: now.addingTimeInterval(-range.seconds))
+        var tools: [AgentKind: ToolTotal] = [:]
+        for i in 0...count {
+            // Smooth, believable waves: busy weekdays / afternoons, quiet nights and weekends.
+            let x = Double(i)
+            let claudeK = max(0, 0.55 + 0.45 * sin(x * 0.9) + 0.25 * sin(x * 2.3 + 1))
+            let cursorK = max(0, 0.35 + 0.35 * sin(x * 0.7 + 2))
+            let codexK = max(0, 0.2 + 0.25 * sin(x * 1.3 + 4))
+            let scale = range == .day ? 1.0 : 9.0
+            for (tool, k, perM) in [(AgentKind.claude, claudeK, 0.42), (.cursor, cursorK, 0.0), (.codex, codexK, 0.0)] {
+                let tokens = Int(k * scale * 2_600_000)
+                let cost = tool == .claude ? Double(tokens) / 1_000_000 * perM : 0
+                s.points.append(Point(date: slot, tool: tool, tokens: tokens, cost: cost))
+                tools[tool, default: ToolTotal(tool: tool)].tokens += tokens
+                tools[tool, default: ToolTotal(tool: tool)].cost += cost
+                if tool != .claude { tools[tool, default: ToolTotal(tool: tool)].unpricedTokens += tokens }
+            }
+            slot = cal.date(byAdding: range == .day ? .hour : .day, value: 1, to: slot)!
+        }
+        let sessions = [AgentKind.claude: range == .day ? 6 : 14 * count / 7 + 3, .cursor: range == .day ? 3 : 5 * count / 7 + 1,
+                        .codex: range == .day ? 2 : 3 * count / 7 + 1]
+        for k in tools.keys { tools[k]!.sessions = sessions[k] ?? 0 }
+        s.tools = tools.values.sorted { $0.tokens > $1.tokens }
+        let claude = tools[.claude] ?? ToolTotal(tool: .claude)
+        s.cost = claude.cost
+        s.sessions = sessions.values.reduce(0, +)
+        s.models = [
+            ModelTotal(tool: .claude, model: "claude-opus-5-5", tokens: Int(Double(claude.tokens) * 0.7), cost: claude.cost * 0.82),
+            ModelTotal(tool: .claude, model: "claude-sonnet-5-5", tokens: Int(Double(claude.tokens) * 0.3), cost: claude.cost * 0.18),
+            ModelTotal(tool: .cursor, model: "composer-2", tokens: tools[.cursor]?.tokens ?? 0, cost: nil),
+            ModelTotal(tool: .codex, model: "gpt-5.6-luna", tokens: tools[.codex]?.tokens ?? 0, cost: nil),
+        ]
+        let total = s.tools.reduce(0) { $0 + $1.tokens }
+        s.totals = TokenCounts(input: total / 60, output: total / 300, cacheRead: total - total / 60 - total / 300 - total / 40,
+                               cacheWrite5m: total / 40)
+        s.savings = claude.cost * 6.5
+        return s
+    }
+
     func summary(_ range: Range) -> Summary {
         _ = revision
+        if Date() < demoUntil { return demoSummary(range) }
         let now = Date()
         let start = now.addingTimeInterval(-range.seconds)
         let startHour = Int(start.timeIntervalSince1970 / 3600)

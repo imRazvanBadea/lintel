@@ -640,6 +640,7 @@ final class AgentStore {
         done.turnEndedAt = Date()
         _ = make("demo-4", .codex, "Refactor the payments store", "/Users/you/shop", .idle, .reasoning)
         UsageStore.shared.showDemo()
+        UsageHistory.shared.showDemo(seconds: seconds)
     }
 
     /// Adds a demo prompt for a screenshot: "permission" or "question".

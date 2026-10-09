@@ -116,7 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let obj: [String: Any] = [
                     "expanded": "\(String(describing: IslandModel.shared.expanded))",
                     "selected": IslandModel.shared.selectedSessionID ?? "",
-                    "cardRect": "\(IslandModel.shared.cardRect)", "agentRect": "\(IslandModel.shared.agentPillRect)",
+                    "cardRect": "\(IslandModel.shared.cardRect)", "agentRect": "\(IslandModel.shared.agentPillRect)", "musicRect": "\(IslandModel.shared.musicPillRect)",
                     "finishedFlash": st.finishedFlash ?? "",
                     "sessions": st.sessions.map { ["id": $0.id, "status": "\($0.status)", "title": $0.displayTitle, "phase": $0.phase.label] },
                     "pending": st.pending.map { ["session": $0.sessionID, "blocking": $0.isBlocking] },
