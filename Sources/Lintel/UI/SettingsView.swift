@@ -44,6 +44,13 @@ struct SettingsView: View {
                     }
                 }
                 Toggle("Show Codex sessions (from ~/.codex/sessions)", isOn: $s.codexEnabled)
+                Picker("Start new sessions in", selection: $s.launchInApp) {
+                    Text("The tool's app (Claude, Codex, Cursor)").tag(true)
+                    Text("The terminal").tag(false)
+                }
+                Picker("Terminal for new sessions", selection: $s.launchTerminal) {
+                    ForEach(LaunchTerminal.allCases.filter { $0.isInstalled || $0 == s.launchTerminal }) { Text($0.label).tag($0) }
+                }
                 Text("Connecting adds Lintel's hooks to ~/.claude/settings.json, ~/.cursor/hooks.json or ~/.codex/hooks.json (a backup is saved next to each). New sessions report to Lintel, and you can answer prompts and reply from the notch. If Lintel isn't running, the agents behave exactly as before.")
                     .font(.caption).foregroundStyle(.secondary)
                 if let error { Text(error).font(.caption).foregroundStyle(.red) }
@@ -63,8 +70,10 @@ struct SettingsView: View {
                     Text("25 seconds").tag(25)
                     Text("60 seconds").tag(60)
                     Text("2 minutes").tag(120)
+                    Text("5 minutes").tag(300)
+                    Text("9 minutes").tag(540)
                 }
-                Text("Keeps a finished Claude Code or Cursor turn open briefly, so a reply typed in the notch continues the same session.")
+                Text("Keeps a finished Claude Code, Codex or Cursor turn open, so a reply typed in the notch continues the same session. It stays open while you're typing a reply (up to 10 minutes). Once it closes, reply in the agent's own app. While it's open, the agent shows its stop hook as still running.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -90,9 +99,11 @@ struct SettingsView: View {
             }
 
             Section("Music") {
-                Toggle("Show what's playing", isOn: $s.musicEnabled)
-                Toggle("Show up next", isOn: $s.showUpNext)
-                Text("Works with any player (Apple Music, Spotify, YouTube Music in any browser…). For YouTube Music's up next, turn on Allow JavaScript from Apple Events in your browser (Chromium browsers: View › Developer; Safari: Develop).")
+                Toggle("Music player", isOn: $s.musicEnabled)
+                if settings.musicEnabled {
+                    Toggle("Show up next", isOn: $s.showUpNext)
+                }
+                Text(!settings.musicEnabled ? "Off: the notch shows only your agents." : "Works with any player (Apple Music, Spotify, YouTube Music in any browser…). For YouTube Music's up next, turn on Allow JavaScript from Apple Events in your browser (Chromium browsers: View › Developer; Safari: Develop).")
                     .font(.caption).foregroundStyle(.secondary)
             }
 

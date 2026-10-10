@@ -14,6 +14,25 @@ final class IslandModel {
     var selectedSessionID: String?
     /// Set by the back button: show the session list instead of the latest "Finished" card.
     var showingList = false
+    /// Sessions whose subagents are shown in the list (folded by default).
+    var unfolded: Set<String> = []
+    /// The rows of the agent list, in order (⌘1…⌘9 follow this).
+    var listedSessions: [AgentSession] { AgentStore.shared.listed(unfolded: unfolded).map(\.session) }
+    /// The new-session composer is open in the agents card.
+    var composing = false
+    /// Keeps the card open while a system sheet (the folder picker) has the mouse.
+    @ObservationIgnored var holdOpen = false
+    /// What you were typing in the composer, kept if the card closes under you.
+    var draftPrompt = ""
+    var draftFolder: String?
+    var draftImages: [URL] = []
+    /// Replies you're writing, per session — kept when the card closes.
+    var replyDrafts: [String: String] = [:]
+    var replyImages: [String: [URL]] = [:]
+    /// The reply box on screen (session id), if any.
+    @ObservationIgnored var visibleReply: String?
+    /// You're writing (a reply or a new chat): moving the mouse away won't close the card; a click outside still does.
+    @ObservationIgnored var editing = false
     /// The usage dashboard is open in the agents card.
     var showingUsage = false
     var usageRange: UsageHistory.Range = .week
@@ -47,6 +66,8 @@ final class IslandModel {
     @ObservationIgnored var agentPillRect: CGRect = .zero
     @ObservationIgnored var musicPillRect: CGRect = .zero
     @ObservationIgnored var cardRect: CGRect = .zero
+    /// The whole notch bar (split into the two pills above).
+    @ObservationIgnored var barRect: CGRect = .zero
 
     @ObservationIgnored private var collapseWork: DispatchWorkItem?
     @ObservationIgnored private var expandWork: DispatchWorkItem?
@@ -70,7 +91,7 @@ final class IslandModel {
             pinnedByEvent = false
         } else {
             expandWork?.cancel()
-            guard expanded != nil, !pinnedByEvent, collapseWork == nil || collapseWork!.isCancelled else { return }
+            guard expanded != nil, !pinnedByEvent, !holdOpen, !editing, collapseWork == nil || collapseWork!.isCancelled else { return }
             let work = DispatchWorkItem { [weak self] in self?.collapse() }
             collapseWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
@@ -78,8 +99,9 @@ final class IslandModel {
     }
 
     func expand(_ island: Island, pinned: Bool = false) {
+        if island == .music && !Settings.shared.musicEnabled { return }
         collapseWork?.cancel()
-        if island != expanded { selectedSessionID = nil; showingList = false }
+        if island != expanded { selectedSessionID = nil; showingList = false; composing = false }
         pinnedByEvent = pinned
         withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) { expanded = island }
     }
@@ -99,6 +121,8 @@ final class IslandModel {
         selectedSessionID = nil
         showingList = false
         showingUsage = false
+        composing = false
+        editing = false
         NotificationCenter.default.post(name: .lintelCollapsed, object: nil)
     }
 }

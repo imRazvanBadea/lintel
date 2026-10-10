@@ -23,11 +23,16 @@ struct RootView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .coordinateSpace(.named("panel"))
+        // A Codex / Cursor session started from the notch reports in: open it.
+        .onChange(of: store.sessions.map { "\($0.id)\u{1}\($0.cwd)" }) {
+            if let id = Launcher.claimLaunched(), model.expanded == .agents, model.selectedSessionID == nil, !model.composing {
+                model.selectedSessionID = id
+            }
+        }
         .onChange(of: model.expanded) { _, new in
             music.setVisible(new == .music)
-            if new == .agents, store.sessions.contains(where: { $0.kind == .claude }) {
-                UsageStore.shared.probeClaude(minInterval: 60)
-            }
+            // The footer shows Claude's usage even with no Claude session open, so keep it fresh.
+            if new == .agents { UsageStore.shared.probeClaude(minInterval: 60) }
         }
     }
 }
@@ -74,26 +79,34 @@ struct NotchBar: View {
         }
     }
 
+    /// Left half opens agents, right half opens music (the whole bar is agents with music off).
+    private func layoutPills() {
+        let r = model.barRect
+        guard settings.musicEnabled else { model.agentPillRect = r; model.musicPillRect = .zero; return }
+        model.agentPillRect = CGRect(x: r.minX, y: r.minY, width: r.width / 2, height: r.height)
+        model.musicPillRect = CGRect(x: r.midX, y: r.minY, width: r.width / 2, height: r.height)
+    }
+
     var body: some View {
         let h = model.menuBarHeight
         HStack(spacing: 0) {
             AgentWing(height: h).frame(width: wing, alignment: .leading).clipped().opacity(wing > 0 ? 1 : 0)
             Color.clear.frame(width: model.notchWidth)
-            MusicWing(height: h).frame(width: wing, alignment: .trailing).clipped().opacity(wing > 0 ? 1 : 0)
+            MusicWing(height: h).frame(width: wing, alignment: .trailing).clipped().opacity(wing > 0 && settings.musicEnabled ? 1 : 0)
         }
         .padding(.horizontal, inset)
         .frame(height: h)
         .background(NotchShape(ear: ear, bottomRadius: min(14, h * 0.4)).fill(Color.black))
         .contentShape(Rectangle())
         .measure { r in
-            // Left half opens agents, right half opens music.
-            model.agentPillRect = CGRect(x: r.minX, y: r.minY, width: r.width / 2, height: r.height)
-            model.musicPillRect = CGRect(x: r.midX, y: r.minY, width: r.width / 2, height: r.height)
+            model.barRect = r
+            layoutPills()
         }
+        .onChange(of: settings.musicEnabled) { layoutPills() }
         .onTapGesture { location in
             // Tap position is in the bar's own space.
             let total = wing * 2 + model.notchWidth + inset * 2
-            IslandModel.shared.toggle(location.x < total / 2 ? .agents : .music)
+            IslandModel.shared.toggle(location.x < total / 2 || !settings.musicEnabled ? .agents : .music)
         }
         .animation(.spring(response: 0.4, dampingFraction: 0.82), value: wing)
         .clipped()
@@ -197,17 +210,28 @@ struct AgentCapsule: View {
                     Text("+\(store.working.count - 1)").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.tertiary)
                 }
             } else if !store.sessions.isEmpty {
+                let shown = Array(store.sessions.prefix(5)), d = height * 0.62
                 HStack(spacing: -5) {
-                    ForEach(store.sessions.prefix(5)) { s in
-                        Avatar(session: s, size: height * 0.62, showsActivity: false)
-                            .overlay(Circle().strokeBorder(Theme.capsuleFill, lineWidth: 1.5))
+                    ForEach(shown) { s in
+                        Avatar(session: s, size: d, showsActivity: false)
+                            // Cut a see-through gap where the next avatar overlaps, so the glass shows between them.
+                            .mask {
+                                Rectangle().overlay {
+                                    if s.id != shown.last?.id {
+                                        Circle().frame(width: d + 3, height: d + 3).offset(x: d - 5).blendMode(.destinationOut)
+                                    }
+                                }
+                                .compositingGroup()
+                            }
                     }
                 }
             } else {
                 Circle().fill(Theme.fillStrong).frame(width: height * 0.36, height: height * 0.36)
             }
         }
-        .padding(.horizontal, store.sessions.isEmpty ? 8 : 10)
+        // The leading avatar sits with the same gap above, below and before it; text gets a little more room after it.
+        .padding(.leading, (height - height * (store.sessions.isEmpty ? 0.36 : 0.62)) / 2)
+        .padding(.trailing, waiting == nil && busy == nil ? (height - height * (store.sessions.isEmpty ? 0.36 : 0.62)) / 2 : 10)
         .fixedSize(horizontal: true, vertical: false)
         .frame(height: height)
         .background(CapsuleBackground())

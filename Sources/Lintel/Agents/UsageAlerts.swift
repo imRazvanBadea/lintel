@@ -14,7 +14,7 @@ enum UsageAlerts {
     /// `label` names the account in the notification ("Claude", "Claude (work)"); `key` identifies it.
     static func check(_ label: String, key accountKey: String, _ usage: UsageStore.Usage) {
         guard Settings.shared.usageAlerts else { return }
-        for (windowName, window) in [("5-hour", usage.short), ("weekly", usage.weekly)] {
+        for (windowName, window) in [("5-hour", usage.short), ((usage.weekly?.minutes ?? 0) >= 28 * 24 * 60 ? "monthly" : "weekly", usage.weekly)] {
             guard let w = window, !w.estimated else { continue }
             let key = "\(accountKey).\(windowName)"
             let level = w.usedPercent >= 100 ? 100 : (w.usedPercent >= 80 ? 80 : 0)

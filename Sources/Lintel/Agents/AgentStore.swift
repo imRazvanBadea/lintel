@@ -65,6 +65,19 @@ final class AgentStore {
 
     func existing(_ id: String) -> AgentSession? { sessions.first { $0.id == id } }
 
+    /// Subagents spawned by `s` that Lintel is tracking.
+    func subagents(of s: AgentSession) -> [AgentSession] { sessions.filter { $0.parentID == s.id } }
+
+    /// The list as shown: sessions without a tracked parent, each followed by its subagents when unfolded.
+    func listed(unfolded: Set<String>) -> [(session: AgentSession, nested: Bool)] {
+        var out: [(AgentSession, Bool)] = []
+        for s in sessions where s.parentID.flatMap(existing) == nil {
+            out.append((s, false))
+            if unfolded.contains(s.id) { out += subagents(of: s).map { ($0, true) } }
+        }
+        return out
+    }
+
     func remove(_ id: String) {
         // Hand anything still open back to the agent's own UI (for Cursor, "ask" — never an implicit allow).
         for p in pending where p.sessionID == id { p.resolve(p.deferPayload) }
@@ -122,6 +135,12 @@ final class AgentStore {
     /// Takes you to the session itself: the exact Claude app chat, Codex thread or terminal tab when possible,
     /// otherwise the app that hosts it.
     func reveal(_ s: AgentSession) {
+        // Started from the notch: it lives in that terminal, whatever the tool.
+        if let t = s.launchedIn {
+            focusTerminal(s, host: (s.agentPID ?? s.hookPPID).flatMap { Proc.hostingApp(of: $0) },
+                          fallbackBundle: t.bundleID)
+            return
+        }
         switch s.kind {
         case .codex:
             if let url = URL(string: "codex://threads/\(s.id)") { NSWorkspace.shared.open(url) }
@@ -153,6 +172,9 @@ final class AgentStore {
 
     /// The app running a session (terminal, editor, Claude / Codex / Cursor app).
     func hostBundleID(_ s: AgentSession) -> String? {
+        if let t = s.launchedIn {
+            return (s.agentPID ?? s.hookPPID).flatMap { Proc.hostingApp(of: $0)?.bundleIdentifier } ?? t.bundleID
+        }
         switch s.kind {
         case .codex: return "com.openai.codex"
         case .cursor: return Self.cursorBundleID
@@ -168,8 +190,8 @@ final class AgentStore {
     }
 
     /// Terminal / iTerm: select the tab running the session (matched by its tty). Others: bring the app forward.
-    fileprivate func focusTerminal(_ s: AgentSession, host: NSRunningApplication?) {
-        let bundle = host?.bundleIdentifier ?? Self.bundleForTerm(s.termProgram)
+    fileprivate func focusTerminal(_ s: AgentSession, host: NSRunningApplication?, fallbackBundle: String? = nil) {
+        let bundle = host?.bundleIdentifier ?? Self.bundleForTerm(s.termProgram) ?? fallbackBundle
         if let pid = s.agentPID, let tty = Proc.tty(of: pid), let bundle {
             let script: String?
             switch bundle {
@@ -274,7 +296,7 @@ final class AgentStore {
             s.hookPPID = pp
             if s.agentPID == nil { s.agentPID = Proc.agentProcess(from: pp) }
         }
-        if let m = json["model"] as? String, !m.isEmpty { s.model = shortModelName(m) }
+        if let m = json["model"] as? String, !m.isEmpty { s.setModel(m) }
         if s.generatedTitle == nil { refreshTitle(s) } // throttled; covers sessions that began before Lintel did
         if ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "PermissionRequest"].contains(event) {
             // The transcript is written just after the hook fires; read a beat later.
@@ -375,7 +397,7 @@ final class AgentStore {
         let cwd = (json["cwd"] as? String) ?? (json["workspace_roots"] as? [String])?.first ?? (json["workspace_paths"] as? [String])?.first
         if let cwd, !cwd.isEmpty, cwd != s.cwd { s.cwd = cwd; s.refreshBranch() }
         if let pp = req.headers["x-lintel-ppid"].flatMap({ pid_t($0) }) { s.hookPPID = pp }
-        if let m = (json["model"] as? String) ?? (json["model_id"] as? String), !m.isEmpty { s.model = shortModelName(m) }
+        if let m = (json["model"] as? String) ?? (json["model_id"] as? String), !m.isEmpty { s.setModel(m) }
         if s.generatedTitle == nil { refreshTitle(s) }
 
         switch event {
@@ -609,16 +631,20 @@ final class AgentStore {
             s.phase = phase
             s.turnStartedAt = Date().addingTimeInterval(-112)
             s.tokens = tokens
-            s.model = model
+            s.setModel(model)
             for (n, d, c) in tools { for _ in 0..<c { s.recordTool(n, detail: d) } }
             s.phase = phase
             return s
         }
         _ = make("demo-1", .claude, "Fix flaky websocket reconnect", "/Users/you/api", .working, .reviewing,
                  tools: [("Read", "reconnect.test.ts", 5), ("Edit", "ws.ts", 12), ("Bash", "pnpm vitest run ws", 3)],
-                 tokens: 48_000, model: "opus")
+                 tokens: 48_000, model: "claude-opus-5-5")
+        existing("demo-1")?.effort = "high"
         _ = make("demo-2", .cursor, "Landing page hero polish", "/Users/you/web", .working, .writing,
-                 tools: [("Write", "Hero.tsx", 4)], tokens: 21_000, model: "sonnet")
+                 tools: [("Write", "Hero.tsx", 4)], tokens: 21_000, model: "claude-sonnet-5-5-medium")
+        for (id, title, phase) in [("demo-2a", "Audit hero image sizes", Phase.researching), ("demo-2b", "Draft hero copy variants", .writing)] {
+            make(id, .cursor, title, "/Users/you/web", .working, phase, model: "claude-sonnet-5-5-medium").parentID = "demo-2"
+        }
         if let s = existing("demo-1") {
             let now = Date()
             func at(_ secs: Double) -> Date { now.addingTimeInterval(-secs) }
@@ -646,6 +672,14 @@ final class AgentStore {
     /// Adds a demo prompt for a screenshot: "permission" or "question".
     func showDemoPrompt(_ kind: String) {
         demoUntil = Date().addingTimeInterval(30)
+        if kind == "reply", let done = existing("demo-3") {
+            // The finished demo turn, held open with the reply bar.
+            let p = PendingRequest(sessionID: done.id, kind: .reply(deadline: Date().addingTimeInterval(25))) { _ in }
+            p.agent = done.kind
+            p.deferPayload = ""
+            withAnimation { pending.append(p) }
+            return
+        }
         guard let s = existing("demo-1") else { return }
         let k: PendingRequest.Kind = kind == "question"
             ? .question([QuestionSpec(question: "Which reconnect strategy should I use?", header: "Strategy",
@@ -662,7 +696,7 @@ final class AgentStore {
     // MARK: Helpers
 
     @ObservationIgnored private var origins: [String: AgentKind] = [:]
-    private static let cursorBundleID = "com.todesktop.230313mzl4w4u92"
+    static let cursorBundleID = "com.todesktop.230313mzl4w4u92"
 
     private func originKind(sid: String, ppid: pid_t?) -> AgentKind {
         if let k = origins[sid] { return k }
@@ -708,10 +742,12 @@ final class AgentStore {
         guard force || s.generatedTitle == nil, Date().timeIntervalSince(s.lastTitleLookup) > (force ? 2 : 8) else { return }
         s.lastTitleLookup = Date()
         let id = s.id
-        TitleResolver.shared.title(for: id, kind: s.kind) { title in
-            guard let title else { return }
+        TitleResolver.shared.title(for: id, kind: s.kind) { title, parent in
+            guard title != nil || parent != nil else { return }
             DispatchQueue.main.async {
-                AgentStore.shared.existing(id)?.generatedTitle = title
+                guard let s = AgentStore.shared.existing(id) else { return }
+                if let title { s.generatedTitle = title }
+                if let parent, s.parentID != parent { s.parentID = parent }
             }
         }
     }
@@ -735,7 +771,7 @@ final class AgentStore {
             DispatchQueue.main.async {
                 guard let s = AgentStore.shared.existing(id) else { return }
                 if let t = r.title { s.title = t }
-                if let m = r.model { s.model = shortModelName(m) }
+                if let m = r.model { s.setModel(m, effort: r.effort) }
                 if let n = r.tokens { s.tokens = n }
                 if s.lastMessage.isEmpty || s.status == .finished, let msg = r.lastText { s.lastMessage = msg }
             }
@@ -744,7 +780,7 @@ final class AgentStore {
 }
 
 enum TranscriptTail {
-    struct Result { var title: String?; var model: String?; var tokens: Int?; var lastText: String? }
+    struct Result { var title: String?; var model: String?; var effort: String?; var tokens: Int?; var lastText: String? }
 
     static func read(path: String, maxBytes: Int = 512 * 1024) -> Result {
         var r = Result()
@@ -762,7 +798,7 @@ enum TranscriptTail {
             case "summary" where r.title == nil: r.title = d["summary"] as? String
             case "assistant":
                 guard let msg = d["message"] as? [String: Any] else { break }
-                if r.model == nil, let m = msg["model"] as? String, !m.hasPrefix("<") { r.model = m }
+                if r.model == nil, let m = msg["model"] as? String, !m.hasPrefix("<") { r.model = m; r.effort = d["effort"] as? String }
                 if r.tokens == nil, let u = msg["usage"] as? [String: Any] {
                     let keys = ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"]
                     r.tokens = keys.reduce(0) { $0 + ((u[$1] as? Int) ?? 0) }

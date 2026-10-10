@@ -10,6 +10,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AgentStore.shared.start()
+        Launcher.locateCLIs()
+        Attachments.startCleanup()
         UsageStore.shared.start()
         // Build the usage history index in the background shortly after launch.
         DispatchQueue.main.asyncAfter(deadline: .now() + 20) { UsageHistory.shared.refresh() }
@@ -46,6 +48,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             switch cmd {
             case "agents": IslandModel.shared.expand(.agents, pinned: true)
             case "music": IslandModel.shared.expand(.music, pinned: true)
+            case "compose":
+                IslandModel.shared.expand(.agents, pinned: true)
+                IslandModel.shared.composing = true
             case "usage":
                 IslandModel.shared.expand(.agents, pinned: true)
                 IslandModel.shared.showingUsage = true
@@ -80,7 +85,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 AgentStore.shared.showDemo()
                 NowPlaying.shared.showDemo()
                 IslandModel.shared.collapse()
-            case "demo-permission", "demo-question":
+            case "demo-compose":
+                // A made-up project and task, so screenshots never show your own folders.
+                IslandModel.shared.draftFolder = "/Users/you/web"
+                IslandModel.shared.draftPrompt = "Add a dark mode toggle to the settings screen"
+                IslandModel.shared.expand(.agents, pinned: true)
+                IslandModel.shared.composing = true
+            case "demo-permission", "demo-question", "demo-reply":
                 AgentStore.shared.showDemoPrompt(String(cmd.dropFirst(5)))
                 IslandModel.shared.expand(.agents, pinned: true)
             case _ where cmd.hasPrefix("connect-"):
@@ -187,7 +198,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         menu.addItem(withTitle: "Show Agents", action: #selector(showAgents), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "Show Music", action: #selector(showMusic), keyEquivalent: "").target = self
+        if Settings.shared.musicEnabled {
+            menu.addItem(withTitle: "Show Music", action: #selector(showMusic), keyEquivalent: "").target = self
+        }
         menu.addItem(withTitle: "Usage History", action: #selector(showUsage), keyEquivalent: "").target = self
         menu.addItem(.separator())
         for t in AgentHooks.Target.allCases {

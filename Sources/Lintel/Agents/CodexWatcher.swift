@@ -178,7 +178,7 @@ final class CodexWatcher {
 
             switch type {
             case "turn_context":
-                if let m = p["model"] as? String { s.model = shortModelName(m) }
+                if let m = p["model"] as? String { s.setModel(m, effort: p["effort"] as? String) }
             case "event_msg":
                 switch p["type"] as? String ?? "" {
                 case "task_started":
@@ -209,6 +209,9 @@ final class CodexWatcher {
                     s.status = .idle
                     s.turnEndedAt = Date()
                     clearExternal(s)
+                case "item_completed":
+                    // Newer Codex builds log the conversation as completed items instead of user_message / agent_message.
+                    applyItem(p["item"] as? [String: Any] ?? [:], to: s, date: Self.date(d) ?? Date())
                 case "token_count":
                     if let rl = p["rate_limits"] as? [String: Any] { UsageStore.shared.applyCodex(rl) }
                     if let info = p["info"] as? [String: Any], let last = info["last_token_usage"] as? [String: Any] {
@@ -245,6 +248,38 @@ final class CodexWatcher {
         // Replaying history shouldn't leave stale "working" state for long-dead turns.
         if initial, let s = session, s.status == .working, Date().timeIntervalSince(fileModified(file)) > 120 {
             s.status = .idle
+        }
+    }
+
+    /// One completed item: your message (or a reply Lintel sent through the stop hook), the agent's reply or its reasoning.
+    /// Tool calls still arrive as response_items.
+    private func applyItem(_ item: [String: Any], to s: AgentSession, date: Date) {
+        let id = item["id"] as? String ?? UUID().uuidString
+        func texts(_ key: String) -> String {
+            ((item[key] as? [[String: Any]]) ?? []).compactMap { $0["text"] as? String }.joined(separator: "\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        // The same message may also have come as an older-style event; don't show it twice.
+        func isRepeat(_ kind: FeedItem.Kind, _ text: String) -> Bool {
+            s.feed.last(where: { $0.kind == kind })?.text == text
+        }
+        switch item["type"] as? String ?? "" {
+        case "UserMessage", "HookPrompt":
+            let raw = texts(item["type"] as? String == "HookPrompt" ? "fragments" : "content")
+            guard let t = FeedReader.cleanUserText(raw), !isRepeat(.user, t) else { return }
+            s.lastPrompt = String(t.split(separator: "\n").first ?? "").prefix(80).description
+            s.upsertFeed(FeedItem(id: "u-\(id)", kind: .user, text: t, date: date))
+        case "AgentMessage":
+            let t = texts("content")
+            guard !t.isEmpty, !isRepeat(.assistant, t) else { return }
+            s.lastMessage = t
+            s.upsertFeed(FeedItem(id: "a-\(id)", kind: .assistant, text: t, date: date))
+        case "Reasoning":
+            let t = ((item["summary_text"] as? [String]) ?? []).joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !t.isEmpty else { return }
+            s.upsertFeed(FeedItem(id: "th-\(id)", kind: .thinking, text: t, date: date))
+        default:
+            break
         }
     }
 

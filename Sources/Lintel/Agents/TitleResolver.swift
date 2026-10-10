@@ -20,15 +20,16 @@ final class TitleResolver: @unchecked Sendable {
     private var claudeIndex: [String: URL] = [:]
     private var lastIndexed = Date.distantPast
 
-    func title(for id: String, kind: AgentKind, completion: @escaping @Sendable (String?) -> Void) {
+    /// The generated title, and for a Cursor subagent the conversation that spawned it.
+    func title(for id: String, kind: AgentKind, completion: @escaping @Sendable (String?, String?) -> Void) {
         queue.async {
-            let t: String?
+            var t: String?, parent: String?
             switch kind {
             case .claude: t = self.claudeTitle(id)
-            case .cursor: t = self.cursorTitle(id)
-            case .codex: t = nil
+            case .cursor: (t, parent) = self.cursorTitle(id)
+            case .codex: break
             }
-            completion(t?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty)
+            completion(t?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty, parent?.nilIfEmpty)
         }
     }
 
@@ -72,21 +73,22 @@ final class TitleResolver: @unchecked Sendable {
 
     // MARK: Cursor
 
-    private func cursorTitle(_ id: String) -> String? {
+    /// The composer's name, and the composer that spawned it when it's a subagent.
+    private func cursorTitle(_ id: String) -> (String?, String?) {
         var db: OpaquePointer?
         let uri = "file:\(cursorDB.path)?mode=ro"
-        guard sqlite3_open_v2(uri, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK else { return nil }
+        guard sqlite3_open_v2(uri, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK else { return (nil, nil) }
         defer { sqlite3_close(db) }
         sqlite3_busy_timeout(db, 200)
         var stmt: OpaquePointer?
-        let sql = "SELECT json_extract(value, '$.name') FROM cursorDiskKV WHERE key = ?"
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+        let sql = "SELECT json_extract(value, '$.name'), json_extract(value, '$.subagentInfo.parentComposerId') FROM cursorDiskKV WHERE key = ?"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return (nil, nil) }
         defer { sqlite3_finalize(stmt) }
         let key = "composerData:\(id)"
         let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
         sqlite3_bind_text(stmt, 1, key, -1, transient)
-        guard sqlite3_step(stmt) == SQLITE_ROW, let c = sqlite3_column_text(stmt, 0) else { return nil }
-        return String(cString: c)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return (nil, nil) }
+        return (sqlite3_column_text(stmt, 0).map { String(cString: $0) }, sqlite3_column_text(stmt, 1).map { String(cString: $0) })
     }
 }
 

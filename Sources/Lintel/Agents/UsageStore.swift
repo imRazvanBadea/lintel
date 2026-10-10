@@ -16,6 +16,8 @@ final class UsageStore {
         var usedPercent: Double
         var resetsAt: Date?
         var estimated = false
+        /// The window's length when the tool says so (Codex's free plan has a single 30-day one).
+        var minutes: Int? = nil
     }
 
     struct Usage: Equatable {
@@ -41,6 +43,7 @@ final class UsageStore {
 
     func start() {
         probeClaude(minInterval: 0)
+        seedCodex()
         refreshLocal()
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshLocal() }
@@ -54,7 +57,7 @@ final class UsageStore {
         // The app's 15-minute log is only a fallback for when Claude Code can't be asked.
         if (Self.claudeExecutable() == nil || probeFailures > 0), Date().timeIntervalSince(lastExact) > 15 * 60 { readClaudeAppLog() }
         if usage[.cursor]?.plan == nil, let plan = Self.cursorPlan() {
-            usage[.cursor] = Usage(plan: plan.capitalized, note: "Usage is shown in Cursor's dashboard")
+            usage[.cursor] = Usage(plan: plan.capitalized, note: "Cursor doesn't share plan usage with other apps. Open Usage to see it in Cursor's dashboard.")
         }
         expireResetWindows()
     }
@@ -64,8 +67,8 @@ final class UsageStore {
         let now = Date()
         for (k, var u) in usage {
             var changed = false
-            if let r = u.short?.resetsAt, r < now { u.short = Window(usedPercent: 0, resetsAt: nil); changed = true }
-            if let r = u.weekly?.resetsAt, r < now { u.weekly = Window(usedPercent: 0, resetsAt: nil); changed = true }
+            if let r = u.short?.resetsAt, r < now { u.short = Window(usedPercent: 0, resetsAt: nil, minutes: u.short?.minutes); changed = true }
+            if let r = u.weekly?.resetsAt, r < now { u.weekly = Window(usedPercent: 0, resetsAt: nil, minutes: u.weekly?.minutes); changed = true }
             if changed { usage[k] = u }
         }
     }
@@ -227,12 +230,14 @@ final class UsageStore {
     nonisolated static func codexUsage(from limits: [String: Any], previous: Usage?) -> Usage {
         func window(_ key: String) -> Window? {
             guard let w = limits[key] as? [String: Any] else { return nil }
-            return Window(usedPercent: (w["used_percent"] as? NSNumber)?.doubleValue ?? 0, resetsAt: date(w["resets_at"]))
+            return Window(usedPercent: (w["used_percent"] as? NSNumber)?.doubleValue ?? 0, resetsAt: date(w["resets_at"]),
+                          minutes: (w["window_minutes"] as? NSNumber)?.intValue)
         }
         var u = previous ?? Usage()
-        let p = window("primary"), s = window("secondary")
-        let pMin = ((limits["primary"] as? [String: Any])?["window_minutes"] as? NSNumber)?.intValue ?? 300
-        if pMin <= 600 { u.short = p; u.weekly = s } else { u.short = s; u.weekly = p }
+        // Codex labels windows by length; anything up to 10 hours is the 5-hour window, the rest is the long one.
+        let windows = [window("primary"), window("secondary")].compactMap { $0 }
+        u.short = windows.first { ($0.minutes ?? 300) <= 600 }
+        u.weekly = windows.first { ($0.minutes ?? 300) > 600 }
         if let plan = limits["plan_type"] as? String { u.plan = plan.capitalized }
         u.updatedAt = Date()
         return u
@@ -305,19 +310,21 @@ final class UsageStore {
 
     /// From a Codex `token_count` event's `rate_limits`.
     func applyCodex(_ limits: [String: Any]) {
-        func window(_ key: String) -> Window? {
-            guard let w = limits[key] as? [String: Any] else { return nil }
-            return Window(usedPercent: (w["used_percent"] as? NSNumber)?.doubleValue ?? 0, resetsAt: Self.date(w["resets_at"]))
-        }
-        var u = usage[.codex] ?? Usage()
-        // Codex labels windows by length; the shorter one is the 5-hour window.
-        let p = window("primary"), s = window("secondary")
-        let pMin = ((limits["primary"] as? [String: Any])?["window_minutes"] as? NSNumber)?.intValue ?? 300
-        if pMin <= 600 { u.short = p; u.weekly = s } else { u.short = s; u.weekly = p }
-        if let plan = limits["plan_type"] as? String { u.plan = plan.capitalized }
-        u.updatedAt = Date()
+        let u = Self.codexUsage(from: limits, previous: usage[.codex])
         if u != usage[.codex] { usage[.codex] = u }
         expireResetWindows()
+    }
+
+    /// The last limits Codex logged, so the footer has numbers before the next session starts.
+    private func seedCodex() {
+        let home = AgentHooks.codexHome
+        DispatchQueue.global(qos: .utility).async {
+            nonisolated(unsafe) let limits = Self.latestCodexRateLimits(home: home)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let limits, self.usage[.codex] == nil else { return }
+                self.applyCodex(limits)
+            }
+        }
     }
 
     // MARK: Cursor

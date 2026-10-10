@@ -188,16 +188,17 @@ final class NotchController {
         }
 
         if event.type == .leftMouseDown && !inside { followClick(at: p) }
+        if model.holdOpen { return } // the folder picker is up
         if event.type == .leftMouseDown && !inside {
             // Clicking anywhere else dismisses an open card (unless something is waiting on you).
             if model.expanded != nil && !AgentStore.shared.hasPendingRequests { model.collapse() }
             return
         }
         let island: Island? = overAgent ? .agents : (overMusic ? .music : nil)
-        // While over the card of an open island, don't switch islands.
+        // Over the other pill switches islands straight away, even while its card is still open.
         if overCard && island == nil {
             model.hoverChanged(over: nil, overCard: true)
-        } else if let island, !(overCard && model.expanded != nil && island != model.expanded) {
+        } else if let island {
             model.hoverChanged(over: island, overCard: false)
         } else if !inside {
             model.hoverChanged(over: nil, overCard: false)
@@ -221,11 +222,25 @@ final class NotchController {
     private func handleKey(_ e: NSEvent) -> Bool {
         guard e.window === panel else { return false }
         if e.keyCode == 53 { // esc
-            if model.selectedSessionID != nil { model.selectedSessionID = nil } else { model.collapse() }
+            if model.composing { model.composing = false } else if model.selectedSessionID != nil { model.selectedSessionID = nil } else { model.collapse() }
+            return true
+        }
+        // ⌘V with an image on the clipboard attaches it to the message you're writing.
+        if e.modifierFlags.contains(.command), e.charactersIgnoringModifiers == "v", model.expanded == .agents {
+            let images = Attachments.fromPasteboard()
+            if !images.isEmpty {
+                NotificationCenter.default.post(name: .lintelPastedImages, object: images)
+                return true
+            }
+        }
+        if e.modifierFlags.contains(.command), e.charactersIgnoringModifiers == "n", model.expanded == .agents {
+            model.selectedSessionID = nil
+            model.showingUsage = false
+            model.composing = true
             return true
         }
         if e.modifierFlags.contains(.command), let c = e.charactersIgnoringModifiers, let n = Int(c), (1...9).contains(n) {
-            let sessions = AgentStore.shared.sessions
+            let sessions = model.listedSessions
             if n <= sessions.count {
                 AgentStore.shared.reveal(sessions[n - 1])
                 model.collapse()

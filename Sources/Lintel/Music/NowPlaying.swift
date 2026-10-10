@@ -143,7 +143,16 @@ final class NowPlaying {
         hint = nil
     }
 
+    @ObservationIgnored private var lastSnapshot: NowPlayingBridge.Snapshot?
+
+    /// The music player was switched on or off in Settings.
+    func musicSettingChanged() {
+        apply(lastSnapshot)
+        if !Settings.shared.musicEnabled, IslandModel.shared.expanded == .music { IslandModel.shared.collapse() }
+    }
+
     private func apply(_ s: NowPlayingBridge.Snapshot?) {
+        lastSnapshot = s
         guard Date() > demoUntil else { return }
         guard Settings.shared.musicEnabled, let s, !s.title.isEmpty else {
             if state != nil { state = nil; artwork = nil }

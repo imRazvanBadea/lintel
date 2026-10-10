@@ -33,8 +33,6 @@ enum Theme {
     static let onAction = dynamic(light: .white, dark: .black)
     /// Selected segment in the phase strip.
     static let raised = dynamic(light: .white, dark: NSColor(white: 1, alpha: 0.1))
-    /// Avatar ring separating overlapping avatars.
-    static let capsuleFill = dynamic(light: .white, dark: NSColor(white: 0.07, alpha: 1))
 
     static let mono = Font.system(size: 12.5, weight: .regular, design: .monospaced)
 
@@ -59,21 +57,62 @@ extension Color {
     }
 }
 
-/// The card that drops out of the notch / capsule: a soft top-to-bottom grade for depth.
+/// Frosted glass that blurs whatever is behind the window (desktop, other apps).
+/// A nil radius rounds it into a capsule.
+struct BehindWindowBlur: NSViewRepresentable {
+    var radius: CGFloat?
+
+    final class View: NSVisualEffectView {
+        var radius: CGFloat?
+        override func layout() {
+            super.layout()
+            layer?.cornerRadius = radius ?? bounds.height / 2
+        }
+    }
+
+    func makeNSView(context: Context) -> View {
+        let v = View()
+        v.material = .hudWindow
+        v.blendingMode = .behindWindow
+        v.state = .active
+        v.wantsLayer = true
+        v.layer?.cornerCurve = .continuous
+        v.layer?.masksToBounds = true
+        return v
+    }
+
+    func updateNSView(_ v: View, context: Context) {
+        v.radius = radius
+        v.needsLayout = true
+    }
+}
+
+/// The see-through grey grade laid over `BehindWindowBlur` in dark mode (cards and capsules).
+let darkGlassTint = LinearGradient(colors: [Color(white: 0.04), Color(white: 0.16)], startPoint: .top, endPoint: .bottom)
+let darkGlassTintOpacity = 0.45
+
+/// The card that drops out of the notch / capsule. Dark: a faint, see-through grey grade over a
+/// behind-window blur. Light: a soft top-to-bottom grade.
 struct CardBackground: ViewModifier {
     var radius: CGFloat = 24
     @Environment(\.colorScheme) private var scheme
 
-    private var gradient: LinearGradient {
-        scheme == .dark
-            ? LinearGradient(colors: [Color(white: 0.015), Color(white: 0.07), Color(white: 0.22)], startPoint: .top, endPoint: .bottom)
-            : LinearGradient(colors: [Color.white, Color(white: 0.985), Color(hex: 0xEEEEF1)], startPoint: .top, endPoint: .bottom)
+    @ViewBuilder private func fill(_ shape: RoundedRectangle) -> some View {
+        if scheme == .dark {
+            ZStack {
+                BehindWindowBlur(radius: radius)
+                shape.fill(darkGlassTint).opacity(darkGlassTintOpacity)
+            }
+        } else {
+            shape.fill(LinearGradient(colors: [Color.white, Color(white: 0.985), Color(hex: 0xEEEEF1)],
+                                      startPoint: .top, endPoint: .bottom))
+        }
     }
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         content
-            .background(shape.fill(gradient))
+            .background(fill(shape))
             // A faint highlight along the top edge gives the light card a little lift.
             .overlay(shape.strokeBorder(
                 LinearGradient(colors: scheme == .dark ? [Color.white.opacity(0.07), Color.white.opacity(0.025)]
@@ -93,12 +132,22 @@ extension View {
 struct CapsuleBackground: View {
     @Environment(\.colorScheme) private var scheme
     var body: some View {
-        Capsule(style: .continuous)
-            .fill(scheme == .dark
-                  ? LinearGradient(colors: [Color(white: 0.04), Color(white: 0.12)], startPoint: .top, endPoint: .bottom)
-                  : LinearGradient(colors: [Color.white, Color(hex: 0xF3F3F5)], startPoint: .top, endPoint: .bottom))
+        fill
             .overlay(Capsule(style: .continuous).strokeBorder(Theme.hairline, lineWidth: 1))
             .shadow(color: .black.opacity(scheme == .dark ? 0.35 : 0.10), radius: 8, y: 3)
+    }
+
+    /// Dark: the same frosted glass as the card, so capsule and card read as one material.
+    @ViewBuilder private var fill: some View {
+        let shape = Capsule(style: .continuous)
+        if scheme == .dark {
+            ZStack {
+                BehindWindowBlur(radius: nil)
+                shape.fill(darkGlassTint).opacity(darkGlassTintOpacity)
+            }
+        } else {
+            shape.fill(LinearGradient(colors: [Color.white, Color(hex: 0xF3F3F5)], startPoint: .top, endPoint: .bottom))
+        }
     }
 }
 
@@ -186,4 +235,26 @@ func relativeTime(_ d: Date) -> String {
     if s < 60 { return "\(s)s ago" }
     if s < 3600 { return "\(s / 60)m ago" }
     return "\(s / 3600)h ago"
+}
+
+/// A small info icon that explains itself in a popover on hover.
+struct InfoTip: View {
+    let text: String
+    @State private var shown = false
+
+    var body: some View {
+        Image(systemName: "info.circle")
+            .font(.system(size: 10.5))
+            .foregroundStyle(shown ? Theme.secondary : Theme.tertiary)
+            .contentShape(Rectangle())
+            .onHover { shown = $0 }
+            .popover(isPresented: $shown, arrowEdge: .bottom) {
+                Text(text)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: 220, alignment: .leading)
+                    .padding(10)
+            }
+    }
 }

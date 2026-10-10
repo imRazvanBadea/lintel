@@ -185,7 +185,7 @@ struct UsageDashboard: View {
                 .font(.system(size: 11.5)).foregroundStyle(Theme.tertiary)
             ForEach(rows, id: \.0) { t, v in
                 HStack(spacing: 6) {
-                    AgentLogo(kind: t, size: 12)
+                    AgentLogo(kind: t, size: 16)
                     Text(t.label).foregroundStyle(Theme.secondary)
                     Spacer(minLength: 14)
                     Text(fmt(v)).monospacedDigit().foregroundStyle(Theme.primary)

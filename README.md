@@ -46,6 +46,7 @@ the other side of the notch shows that too.
 | Jump to the exact chat / thread / terminal tab | ✅ ³ | app only | ✅ |
 | Plan usage (5-hour + weekly window, reset time) | ✅ exact | plan + link | ✅ exact |
 | Cost and token history | ✅ | ✅ ⁴ | ✅ |
+| Start a new session from the notch | ✅ | ✅ | ✅ |
 
 <sub>¹ For sessions in the Claude desktop app. Claude Code in a plain terminal doesn't generate titles, so those show
 your prompt. ² Through Codex hooks, which Codex runs only after you approve them once (see below). ³ Claude desktop
@@ -55,7 +56,15 @@ Lintel records it from Cursor's hooks from the moment you connect.</sub>
 - **One colour per session.** Each session gets a circle with the first letter of its project, ringed by a
   spinner while it works.
 - **It asks for you.** Permission prompts and questions open the card by themselves, with a soft sound.
-- **Finished turns** show the agent's summary and a reply box for a few seconds.
+- **Start a session from the notch.** Press **+**, pick Claude Code, Codex or Cursor and a project folder, type
+  the task and hit Start. It opens in the tool's own app, or in your terminal (Terminal, iTerm or Ghostty) running
+  the tool's CLI, and shows up in the list like any other session.
+- **Images, too.** Attach screenshots or pictures to a new session or a reply with 📎, or paste them with ⌘V. Each one is saved as a file
+  and its path goes into the message, so the agent can open it.
+- **Reply to keep going.** A finished turn shows the agent's summary and a reply box. Your reply continues the same
+  session in place. A ring on the send button shows how long the turn stays open, and while you're typing it stays
+  open for up to 10 minutes. Drafts are kept per session, so closing the card doesn't lose them.
+- **Subagents fold under their parent**, so a busy session stays one row until you open it.
 - **Usage at a glance.** The bottom of the card shows how much of your plan is left and when it resets, even when
   no agent is running. You get a notification at 80% and 100% of a window.
 - **Sounds that work.** Pick one for *needs you* and one for *finished* (with a preview). They're muted when you're
@@ -70,6 +79,10 @@ Lintel records it from Cursor's hooks from the moment you connect.</sub>
 <p align="center">
   <img src="docs/images/detail-light.png" width="49%" alt="Session detail">
   <img src="docs/images/permission-dark.png" width="49%" alt="Approving a command (dark)">
+</p>
+<p align="center">
+  <img src="docs/images/compose-light.png" width="49%" alt="Starting a new session from the notch">
+  <img src="docs/images/reply-dark.png" width="49%" alt="Replying to a finished turn (dark)">
 </p>
 
 ### Usage history
@@ -92,6 +105,7 @@ are shown as unpriced rather than guessed. Open it from the menu bar (*Usage His
   read from the page. Click a song in *Up next* to play it.
 - **Controls.** Play / pause / skip, and click or drag the progress bar to seek. Click the cover to jump to the
   player, including the exact YouTube Music tab.
+- **Optional.** Turn the music player off in Settings and Lintel is just your agents.
 
 <p align="center">
   <img src="docs/images/music-light.png" width="44%" alt="Music card (light)">
@@ -105,7 +119,8 @@ are shown as unpriced rather than guessed. Open it from the menu bar (*Usage His
   thin glowing line under the notch shows that something is working. Prefer always-visible wings? It's a setting.
 - **On an external display,** you get two capsules at the top edge.
 - **Follows the display you're using,** starting on your main display.
-- **Light, Dark or System** appearance. Lives in the menu bar; the menu bar icon can be hidden too.
+- **Light, Dark or System** appearance (dark cards are frosted glass). Lives in the menu bar; the menu bar icon can
+  be hidden too.
 
 ## Requirements
 
@@ -189,9 +204,9 @@ tool the agent is using right now. Agents don't report them.
 - **Writing:** editing or creating files, or running commands that change things.
 - **Reviewing:** running tests, builds, linters or `git status`, and the finished state.
 
-**Replies.** A finished Claude Code, Cursor or Codex turn is held open for 25 s by default (configurable up to 2 min;
-typing pauses the countdown). A reply typed in the notch continues the same session. It can't be open-ended: the
-agent counts the turn as running while Lintel holds it.
+**Replies.** A finished Claude Code, Cursor or Codex turn is held open for 25 s by default (configurable up to
+9 minutes; while you're typing it stays open for up to 10). A reply typed in the notch continues the same session.
+It can't be open-ended: the agent counts the turn as running while Lintel holds it.
 
 **Prompts you don't answer** go back to the agent's own UI after 10 minutes (configurable), or straight away with
 *Answer in terminal*.
@@ -235,8 +250,9 @@ YouTube Music tab ── AppleScript → page JavaScript ───────�
 - **Network.** Lintel's only request of its own is the daily update check to `api.github.com` (and the DMG download
   when there's an update); turn it off in Settings › Updates. The usage check runs your own Claude Code, which talks
   to Anthropic as it always does.
-- **Stored:** your preferences (`UserDefaults`), `~/.lintel/` (hook helper, token, Cursor usage log) and the usage
-  history cache in `~/Library/Caches/Lintel`.
+- **Stored:** your preferences (`UserDefaults`, including the folders you started sessions in), `~/.lintel/` (hook
+  helper, token, Cursor usage log, images you attached, cleaned up automatically) and the usage history cache in
+  `~/Library/Caches/Lintel`.
 
 ## Limitations
 
@@ -259,9 +275,10 @@ Sources/Lintel/
   App/      main, AppDelegate (menu bar, hotkeys, dev commands), NotchPanel (window + mouse), IslandModel, Settings,
             Sounds, Spawn, Updater
   Agents/   HookServer, AgentHooks (installer), AgentStore, AgentModels, CodexWatcher, FeedReader, TitleResolver,
-            UsageStore, UsageAlerts, UsageHistory, Pricing, Proc
+            Launcher (new sessions), Attachments, UsageStore, UsageAlerts, UsageHistory, Pricing, Proc
   Music/    NowPlaying, NowPlayingBridge, WebQueueReader, ScriptRunner
-  UI/       RootView (notch / capsules), AgentViews, UsageDashboard, MusicViews, Avatar, Theme, SettingsView
+  UI/       RootView (notch / capsules), AgentViews, NewSessionView, ReplyBar, AttachmentViews, UsageDashboard,
+            MusicViews, Avatar, Theme, SettingsView
 Sources/LintelHook/   the hook helper agents run (raw sockets, no dependencies)
 Bridge/     LintelNowPlaying.m — MediaRemote bridge, built into the app by build.sh
 scripts/    build.sh, release.sh, screenshots.sh, compose-shot.swift, make-icon.swift, simulate.sh

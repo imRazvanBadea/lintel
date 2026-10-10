@@ -49,12 +49,18 @@ final class Settings {
     var codexEnabled: Bool { didSet { d.set(codexEnabled, forKey: "codexEnabled"); onCodexChange?() } }
     /// Hold Cursor's shell commands until you approve them in the notch (Cursor's own allowlist still applies after).
     var cursorShellApprovals: Bool { didSet { d.set(cursorShellApprovals, forKey: "cursorShellApprovals") } }
-    var musicEnabled: Bool { didSet { d.set(musicEnabled, forKey: "musicEnabled") } }
+    /// The music player (wing, capsule and card). Off leaves Lintel as just the agents notch.
+    var musicEnabled: Bool { didSet { d.set(musicEnabled, forKey: "musicEnabled"); NowPlaying.shared.musicSettingChanged() } }
     /// How the notch looks at rest on a notched display. Minimal keeps the menu bar beside the notch free.
     var notchStyle: NotchStyle { didSet { d.set(notchStyle.rawValue, forKey: "notchStyle") } }
     var showMenuBarIcon: Bool { didSet { d.set(showMenuBarIcon, forKey: "showMenuBarIcon"); onMenuBarIconChange?() } }
     var showUpNext: Bool { didSet { d.set(showUpNext, forKey: "showUpNext") } }
     /// Look for a new release on GitHub once a day.
+    /// Where sessions started from the notch run, and the tool picked last time.
+    var launchTerminal: LaunchTerminal { didSet { d.set(launchTerminal.rawValue, forKey: "launchTerminal") } }
+    var launchAgent: AgentKind { didSet { d.set(launchAgent.rawValue, forKey: "launchAgent") } }
+    /// Start sessions in the tool's own app (Claude, Cursor) rather than the terminal, when it has one.
+    var launchInApp: Bool { didSet { d.set(launchInApp, forKey: "launchInApp") } }
     var checkForUpdates: Bool { didSet { d.set(checkForUpdates, forKey: "checkForUpdates"); Updater.shared.start() } }
 
     var launchAtLogin: Bool {
@@ -96,6 +102,7 @@ final class Settings {
             "cursorShellApprovals": false,
             "showUpNext": true,
             "checkForUpdates": true,
+            "launchInApp": true,
             "showMenuBarIcon": true,
             "notchStyle": NotchStyle.minimal.rawValue,
         ])
@@ -115,6 +122,10 @@ final class Settings {
         showUpNext = d.bool(forKey: "showUpNext")
         checkForUpdates = d.bool(forKey: "checkForUpdates")
         showMenuBarIcon = d.bool(forKey: "showMenuBarIcon")
+        launchTerminal = LaunchTerminal(rawValue: d.string(forKey: "launchTerminal") ?? "")
+            ?? [.iterm, .ghostty].first(where: \.isInstalled) ?? .terminal
+        launchInApp = d.bool(forKey: "launchInApp")
+        launchAgent = AgentKind(rawValue: d.string(forKey: "launchAgent") ?? "") ?? .claude
         notchStyle = NotchStyle(rawValue: d.string(forKey: "notchStyle") ?? "") ?? .minimal
     }
 }

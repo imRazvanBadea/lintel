@@ -146,7 +146,11 @@ final class AgentSession: Identifiable {
     var turnToolCalls = 0
     var totalToolCalls = 0
     var tokens = 0
+    /// Display name of the model ("Sonnet 5.5") and the reasoning effort when the tool reports it.
     var model = ""
+    var effort: String?
+    /// The session that spawned this one (Cursor subagents), shown folded under it in the list.
+    var parentID: String?
     var lastMessage = ""
     /// Recent conversation and tool activity, oldest first (capped).
     var feed: [FeedItem] = []
@@ -156,11 +160,20 @@ final class AgentSession: Identifiable {
     var agentPID: pid_t?
     var hookPPID: pid_t?
     var termProgram = ""
+    /// Set for sessions started from the notch: the terminal they run in.
+    var launchedIn: LaunchTerminal?
 
     init(id: String, kind: AgentKind, colorIndex: Int) {
         self.id = id
         self.kind = kind
         self.colorIndex = colorIndex
+    }
+
+    /// Takes a raw model id ("claude-sonnet-5-5-medium"); an effort folded into the id wins over `effort`.
+    func setModel(_ raw: String, effort: String? = nil) {
+        let (name, folded) = modelDisplayName(raw)
+        if model != name { model = name }
+        if let e = (folded ?? effort)?.lowercased(), !e.isEmpty, self.effort != e { self.effort = e }
     }
 
     var project: String { cwd.isEmpty ? kind.label : (cwd as NSString).lastPathComponent }
@@ -271,11 +284,31 @@ final class AgentSession: Identifiable {
     }
 }
 
-func shortModelName(_ m: String) -> String {
-    let l = m.lowercased()
-    for n in ["opus", "sonnet", "haiku", "fable"] where l.contains(n) { return n }
-    if l.hasPrefix("gpt") || l.contains("codex") { return String(m.prefix(14)) }
-    return String(m.prefix(14))
+/// "claude-sonnet-5-5-medium" → ("Sonnet 5.5", "medium"); "claude-3-5-haiku-20241022" → ("Haiku 3.5", nil);
+/// "gpt-5-codex" → ("GPT-5 Codex", nil).
+func modelDisplayName(_ raw: String) -> (name: String, effort: String?) {
+    var parts = raw.lowercased().split(separator: "-").map(String.init)
+    var effort: String?
+    let efforts = ["low", "medium", "high", "xhigh", "max"]
+    while let last = parts.last, efforts.contains(last) || last == "thinking" || last == "fast" || (last.count == 8 && Int(last) != nil) {
+        if efforts.contains(last) { effort = last }
+        parts.removeLast()
+    }
+    if parts.first == "claude" { parts.removeFirst() }
+    for family in ["opus", "sonnet", "haiku", "fable"] {
+        guard let i = parts.firstIndex(of: family) else { continue }
+        // The version sits after the family (opus-5-5) or, in older ids, before it (3-5-sonnet).
+        let after = parts[(i + 1)...].prefix { Int($0) != nil }
+        let before = parts[..<i].reversed().prefix { Int($0) != nil }.reversed()
+        let version = (after.isEmpty ? Array(before) : Array(after)).joined(separator: ".")
+        return (family.capitalized + (version.isEmpty ? "" : " \(version)"), effort)
+    }
+    let name = parts.joined(separator: "-")
+    if name.hasPrefix("gpt-") {
+        let rest = name.dropFirst(4).split(separator: "-", maxSplits: 1)
+        return ("GPT-\(rest.first ?? "")" + (rest.count > 1 ? " " + rest[1].replacingOccurrences(of: "-", with: " ").capitalized : ""), effort)
+    }
+    return (String(name.prefix(20)), effort)
 }
 
 func formatTokens(_ n: Int) -> String {

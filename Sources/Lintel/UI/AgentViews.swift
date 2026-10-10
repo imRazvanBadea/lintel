@@ -10,6 +10,8 @@ struct AgentCard: View {
         Group {
             if model.showingUsage {
                 UsageDashboard()
+            } else if model.composing {
+                NewSessionView()
             } else if let id = model.selectedSessionID, let s = store.existing(id),
                let p = store.pending.first(where: { $0.sessionID == id && $0.isBlocking }) {
                 AttentionView(request: p, session: s, queued: 0)
@@ -24,15 +26,9 @@ struct AgentCard: View {
                 FinishedView(session: s, reply: p)
             } else if !model.showingList, model.selectedSessionID == nil, let id = store.finishedFlash, let s = store.existing(id) {
                 FinishedView(session: s, reply: nil)
-            } else if let id = model.selectedSessionID ?? (store.sessions.count == 1 && !model.showingList ? store.sessions.first?.id : nil),
-                      let s = store.existing(id) {
+            } else if let id = model.selectedSessionID, let s = store.existing(id) {
                 VStack(spacing: 0) {
-                    SessionDetailView(session: s, showBack: store.sessions.count > 1 || !store.pending.isEmpty)
-                    UsageFooter()
-                }
-            } else if store.sessions.isEmpty {
-                VStack(spacing: 0) {
-                    EmptyAgentsView()
+                    SessionDetailView(session: s, showBack: true)
                     UsageFooter()
                 }
             } else {
@@ -47,6 +43,7 @@ struct AgentCard: View {
         .animation(.spring(response: 0.35, dampingFraction: 0.86), value: model.selectedSessionID)
         .animation(.spring(response: 0.35, dampingFraction: 0.86), value: model.showingList)
         .animation(.spring(response: 0.35, dampingFraction: 0.86), value: model.showingUsage)
+        .animation(.spring(response: 0.35, dampingFraction: 0.86), value: model.composing)
         .animation(.spring(response: 0.35, dampingFraction: 0.86), value: store.pending.map(\.id))
     }
 }
@@ -65,19 +62,18 @@ struct BackButton: View {
 
 // MARK: Usage
 
-/// Plan usage for each tool that has a session open: the 5-hour window, the week, and when it resets.
+/// Plan usage for every connected tool: what's left of the 5-hour window at a glance; hover for the week and resets.
 struct UsageFooter: View {
-    @Environment(AgentStore.self) private var store
     @Environment(UsageStore.self) private var usage
+    @State private var hovering = false
 
     /// One row of the footer: a tool's default account, or an extra one ("work").
     struct Entry: Identifiable { let id: String; let kind: AgentKind; let slug: String?; let usage: UsageStore.Usage }
 
-    /// Accounts of the tools with a session open — or, with nothing running, every account we have numbers for.
+    /// Every account we have numbers for, in a fixed order, whether or not it has a session open right now.
     private var entries: [Entry] {
-        let active = Set(store.sessions.map(\.kind))
         var out: [Entry] = []
-        for k in [AgentKind.claude, .cursor, .codex] where active.isEmpty || active.contains(k) {
+        for k in [AgentKind.claude, .cursor, .codex] {
             if let u = usage.usage[k] { out.append(Entry(id: k.rawValue, kind: k, slug: nil, usage: u)) }
             for (a, u) in usage.extraUsage.sorted(by: { $0.key.id < $1.key.id }) where a.kind == k {
                 out.append(Entry(id: a.id, kind: k, slug: a.slug, usage: u))
@@ -91,16 +87,22 @@ struct UsageFooter: View {
         if !entries.isEmpty {
             VStack(spacing: 8) {
                 Divider().overlay(Theme.hairline)
-                if entries.count == 1, let e = entries.first {
-                    fullRow(e.kind, e.usage, slug: e.slug)
+                if entries.count == 1 || hovering {
+                    // One tool, or hovering: the 5-hour window, the week and the reset for each.
+                    VStack(spacing: 8) {
+                        ForEach(entries) { e in fullRow(e.kind, e.usage, slug: e.slug) }
+                    }
+                    .transition(.opacity)
                 } else {
                     // Several at once: just the 5-hour window each, side by side.
                     HStack(spacing: 14) {
                         ForEach(entries) { e in compact(e.kind, e.usage, slug: e.slug) }
                         Spacer(minLength: 0)
                     }
+                    .transition(.opacity)
                 }
             }
+            .onHover { h in withAnimation(.spring(response: 0.3, dampingFraction: 0.88)) { hovering = h } }
             .padding(.horizontal, 16)
             .padding(.bottom, 14)
             .contentShape(Rectangle())
@@ -123,14 +125,22 @@ struct UsageFooter: View {
             logo(kind, slug: slug, size: 16)
             if let short = u.short {
                 meter("5h", short, width: 46)
-                if let week = u.weekly { meter("Week", week, width: 46) }
+                if let week = u.weekly { meter(windowLabel(week), week, width: 46) }
                 Spacer(minLength: 4)
                 Text(resetText(short))
                     .font(.system(size: 11.5)).monospacedDigit()
                     .foregroundStyle(short.usedPercent >= 100 ? Theme.amber : Theme.tertiary)
                     .lineLimit(1).fixedSize()
+            } else if let long = u.weekly {
+                // Only a long window (Codex's free plan: 30 days).
+                meter(windowLabel(long), long, width: 46)
+                Spacer(minLength: 4)
+                Text(resetText(long))
+                    .font(.system(size: 11.5)).monospacedDigit()
+                    .foregroundStyle(long.usedPercent >= 100 ? Theme.amber : Theme.tertiary)
+                    .lineLimit(1).fixedSize()
             } else {
-                cursorInfo(u)
+                planInfo(kind, u)
             }
         }
         .help(help(u))
@@ -141,7 +151,7 @@ struct UsageFooter: View {
     private func compact(_ kind: AgentKind, _ u: UsageStore.Usage, slug: String?) -> some View {
         HStack(spacing: 6) {
             logo(kind, slug: slug, size: 15)
-            if let short = u.short {
+            if let short = u.short ?? u.weekly {
                 bar(short, width: 30)
                 Text(short.usedPercent >= 100 ? resetText(short).replacingOccurrences(of: "Back in ", with: "↺ ")
                                               : "\(Int(100 - min(100, short.usedPercent)))%")
@@ -159,14 +169,25 @@ struct UsageFooter: View {
         .help(help(u, kind: kind))
     }
 
+    /// No numbers to show: the plan, and for Cursor a link to its dashboard.
     @ViewBuilder
-    private func cursorInfo(_ u: UsageStore.Usage) -> some View {
-        Text([u.plan.map { "\($0) plan" }, u.note].compactMap { $0 }.joined(separator: " · "))
-            .font(.system(size: 11.5)).foregroundStyle(Theme.tertiary).lineLimit(1)
+    private func planInfo(_ kind: AgentKind, _ u: UsageStore.Usage) -> some View {
+        HStack(spacing: 6) {
+            Text(u.plan.map { "\($0) plan" } ?? kind.label)
+                .font(.system(size: 11.5)).foregroundStyle(Theme.tertiary).lineLimit(1)
+            if let note = u.note { InfoTip(text: note) }
+        }
         Spacer(minLength: 4)
-        Button("Usage ↗") { Self.openCursorUsage() }
-            .buttonStyle(PillButtonStyle(kind: .quiet, height: 20))
-            .font(.system(size: 11.5))
+        if kind == .cursor {
+            Button { Self.openCursorUsage() } label: {
+                HStack(spacing: 3) {
+                    Text("Usage").font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
+                    Image(systemName: "arrow.up.right").font(.system(size: 8.5, weight: .semibold)).foregroundStyle(Theme.tertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     private static func openCursorUsage() {
@@ -177,7 +198,7 @@ struct UsageFooter: View {
         var parts: [String] = []
         if let k = kind { parts.append(k.label) }
         if let s = u.short { parts.append("5-hour: \(Int(s.usedPercent))% used") }
-        if let w = u.weekly { parts.append("week: \(Int(w.usedPercent))% used") }
+        if let w = u.weekly { parts.append("\(windowLabel(w).lowercased()): \(Int(w.usedPercent))% used") }
         if let s = u.short, s.resetsAt != nil { parts.append(resetText(s).lowercased()) }
         if u.short?.estimated == true { parts.append("estimated from the Claude app's log") }
         return parts.joined(separator: " · ")
@@ -202,6 +223,11 @@ struct UsageFooter: View {
         }
     }
 
+    private func windowLabel(_ w: UsageStore.Window) -> String {
+        guard let m = w.minutes, m > 8 * 24 * 60 else { return "Week" }
+        return m >= 28 * 24 * 60 ? "Month" : "\(m / (24 * 60))d"
+    }
+
     private func resetText(_ w: UsageStore.Window) -> String {
         guard let r = w.resetsAt else { return w.usedPercent >= 100 ? "Limit reached" : "" }
         let mins = Int(r.timeIntervalSinceNow / 60)
@@ -209,7 +235,8 @@ struct UsageFooter: View {
         let when: String
         if mins < 60 { when = "\(max(1, mins))m" }
         else if mins < 24 * 60 { when = "\(mins / 60)h \(mins % 60)m" }
-        else { when = r.formatted(.dateTime.weekday(.abbreviated).hour().minute()) }
+        else if mins < 7 * 24 * 60 { when = r.formatted(.dateTime.weekday(.abbreviated).hour().minute()) }
+        else { when = r.formatted(.dateTime.month(.abbreviated).day()) }
         return w.usedPercent >= 100 ? "Back in \(approx)\(when)" : "Resets in \(approx)\(when)"
     }
 }
@@ -251,58 +278,114 @@ struct AgentLogo: View {
 
 struct SessionListView: View {
     @Environment(AgentStore.self) private var store
+    @Environment(IslandModel.self) private var model
 
     var body: some View {
         VStack(spacing: 0) {
-            ForEach(Array(store.sessions.enumerated()), id: \.element.id) { i, s in
-                SessionRow(session: s, index: i + 1)
+            HStack(spacing: 8) {
+                Text("Agents").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.primary)
+                if !store.working.isEmpty {
+                    Text("\(store.working.count) working").font(.system(size: 12.5)).foregroundStyle(Theme.tertiary)
+                }
+                Spacer(minLength: 0)
+                Button { model.composing = true } label: {
+                    Image(systemName: "plus").font(.system(size: 13, weight: .semibold))
+                }
+                .buttonStyle(IconButtonStyle(size: 28))
+                .help("New session (⌘N)")
+            }
+            .padding(.leading, 14).padding(.trailing, 8).padding(.top, 8).padding(.bottom, 4)
+
+            if store.sessions.isEmpty {
+                EmptyAgentsView()
+            }
+            ForEach(Array(store.listed(unfolded: model.unfolded).enumerated()), id: \.element.session.id) { i, row in
+                SessionRow(session: row.session, index: i + 1, nested: row.nested)
             }
         }
         .padding(6)
+        .animation(.spring(response: 0.35, dampingFraction: 0.86), value: model.unfolded)
     }
 }
 
 struct SessionRow: View {
+    @Environment(AgentStore.self) private var store
+    @Environment(IslandModel.self) private var model
     let session: AgentSession
     let index: Int
+    var nested = false
 
-    private var subtitle: String {
-        let where_ = "\(session.project) · \(session.kind.label)"
+    private var status: String {
         switch session.status {
-        case .waiting: return "Waiting on you · \(where_)"
-        case .working: return "\(session.phase.label) · \(where_)"
-        case .finished: return "Finished · \(where_)"
-        case .idle: return where_
+        case .waiting: return "Waiting on you · "
+        case .working: return "\(session.phase.label) · "
+        case .finished: return "Finished · "
+        case .idle: return ""
         }
     }
 
     var body: some View {
-        Button {
-            IslandModel.shared.selectedSessionID = session.id
-        } label: {
-            HStack(spacing: 12) {
-                Avatar(session: session, size: 30)
-                    .padding(4)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(session.displayTitle).font(.system(size: 14.5, weight: .medium)).foregroundStyle(Theme.primary).lineLimit(1)
-                    Text(subtitle).font(.system(size: 12.5)).foregroundStyle(Theme.secondary).lineLimit(1)
+        let subagents = nested ? [] : store.subagents(of: session)
+        HStack(spacing: 8) {
+            Button {
+                IslandModel.shared.selectedSessionID = session.id
+            } label: {
+                HStack(spacing: 12) {
+                    Avatar(session: session, size: nested ? 24 : 30)
+                        .padding(4)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(session.displayTitle).font(.system(size: nested ? 13.5 : 14.5, weight: .medium))
+                            .foregroundStyle(Theme.primary).lineLimit(1)
+                        HStack(spacing: 4) {
+                            Text("\(status)\(session.project) ·").lineLimit(1)
+                            AgentLogo(kind: session.kind, size: 13)
+                            Text(session.kind.label).lineLimit(1).fixedSize()
+                        }
+                        .font(.system(size: 12.5)).foregroundStyle(Theme.secondary)
+                    }
+                    Spacer(minLength: 8)
+                    if index <= 9 {
+                        Text("⌘\(index)").font(.system(size: 12, weight: .medium, design: .rounded)).foregroundStyle(Theme.tertiary)
+                    }
                 }
-                Spacer(minLength: 8)
-                if index <= 9 {
-                    Text("⌘\(index)").font(.system(size: 12, weight: .medium, design: .rounded)).foregroundStyle(Theme.tertiary)
-                }
-                Circle().fill(session.statusColor).frame(width: 8, height: 8)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+
+            if !subagents.isEmpty { fold(subagents) }
         }
-        .buttonStyle(.plain)
+        .padding(.leading, nested ? 30 : 10)
+        .padding(.trailing, 10)
+        .padding(.vertical, nested ? 5 : 8)
         .hoverRow()
         .contextMenu {
             Button("Jump to session") { AgentStore.shared.reveal(session) }
             Button("Hide from list") { AgentStore.shared.remove(session.id) }
         }
+    }
+
+    /// The subagents this session spawned, folded into a small stack; click to show or hide them.
+    private func fold(_ subagents: [AgentSession]) -> some View {
+        let open = model.unfolded.contains(session.id)
+        return Button {
+            if open { model.unfolded.remove(session.id) } else { model.unfolded.insert(session.id) }
+        } label: {
+            HStack(spacing: 5) {
+                HStack(spacing: 2) {
+                    ForEach(subagents.prefix(3)) { s in Avatar(session: s, size: 12, showsActivity: false) }
+                }
+                if subagents.count > 3 {
+                    Text("+\(subagents.count - 3)").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Theme.tertiary)
+                }
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.tertiary)
+                    .rotationEffect(.degrees(open ? 180 : 0))
+            }
+            .padding(.horizontal, 7).frame(height: 24)
+            .background(Capsule().fill(open ? Theme.fillStrong : Theme.fill))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(open ? "Hide subagents" : "Show \(subagents.count) subagent\(subagents.count == 1 ? "" : "s")")
     }
 }
 
@@ -313,7 +396,7 @@ struct EmptyAgentsView: View {
     var body: some View {
         VStack(spacing: 10) {
             Text("No agents running").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.primary)
-            Text(claude || cursor ? "Start Claude Code, Cursor or Codex and it shows up here."
+            Text(claude || cursor ? "Press + to start Claude Code, Codex or Cursor in a project, or start one anywhere and it shows up here."
                                   : "Connect your agents so sessions, prompts and questions show up here.")
                 .font(.system(size: 12.5)).foregroundStyle(Theme.secondary).multilineTextAlignment(.center)
             HStack(spacing: 8) {
@@ -328,7 +411,8 @@ struct EmptyAgentsView: View {
             }
             .padding(.top, 4)
         }
-        .padding(.vertical, 24)
+        .padding(.top, 12)
+        .padding(.bottom, 20)
         .padding(.horizontal, 28)
         .frame(maxWidth: .infinity)
     }
@@ -337,8 +421,12 @@ struct EmptyAgentsView: View {
 // MARK: Detail
 
 struct SessionDetailView: View {
+    @Environment(AgentStore.self) private var store
     let session: AgentSession
     var showBack: Bool
+
+    /// The finished turn the agent is still holding open for a reply, if any.
+    private var openTurn: PendingRequest? { store.pendingFor(session).first { !$0.isBlocking } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -368,19 +456,31 @@ struct SessionDetailView: View {
 
             ActivityFeed(session: session)
 
-            TimelineView(.periodic(from: .now, by: 1)) { _ in
-                HStack(spacing: 6) {
-                    let parts = [session.tokens > 0 ? "\(formatTokens(session.tokens)) tokens" : nil,
-                                 session.model.isEmpty ? nil : session.model,
-                                 session.turnDuration.map { "turn \(formatDuration($0))" }].compactMap { $0 }
-                    Text(parts.joined(separator: "  ·  "))
-                    Spacer(minLength: 0)
-                }
-                .font(.system(size: 11.5)).monospacedDigit().foregroundStyle(Theme.tertiary)
+            if let openTurn {
+                ReplyBar(session: session, request: openTurn)
+                    .id(openTurn.id)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
 
-            Button("Jump to session") { AgentStore.shared.reveal(session); IslandModel.shared.collapse() }
-                .buttonStyle(PillButtonStyle(kind: .secondary, height: 34))
+            HStack(spacing: 8) {
+                AgentLogo(kind: session.kind, size: 15)
+                TimelineView(.periodic(from: .now, by: 1)) { _ in
+                    let parts = [session.tokens > 0 ? "\(formatTokens(session.tokens)) tokens" : nil,
+                                 session.model.isEmpty ? nil : session.model,
+                                 session.effort.map { $0 == "xhigh" ? "XHigh" : $0.capitalized },
+                                 session.turnDuration.map { formatDuration($0) }].compactMap { $0 }
+                    Text(parts.joined(separator: " · "))
+                        .font(.system(size: 11.5)).monospacedDigit().foregroundStyle(Theme.tertiary)
+                        .lineLimit(1).truncationMode(.middle)
+                }
+                .help([session.kind.label, session.model, session.effort.map { "\($0) effort" }]
+                    .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
+                Spacer(minLength: 4)
+                Button("Jump to session") { AgentStore.shared.reveal(session); IslandModel.shared.collapse() }
+                    .buttonStyle(PillButtonStyle(kind: .secondary, height: 30))
+                    .font(.system(size: 12.5, weight: .medium))
+                    .fixedSize()
+            }
         }
         .padding(20)
         .onAppear { AgentStore.shared.refreshFeed(session, force: true) }
@@ -415,61 +515,62 @@ struct StatusChip: View {
 }
 
 /// The conversation, newest at the bottom: your messages, the agent's replies and thinking, and its tool calls.
+/// No box around it — it fades out at the top and bottom edges while there's more to scroll.
 struct ActivityFeed: View {
     let session: AgentSession
+    @State private var moreAbove = false
+    @State private var moreBelow = false
 
-    /// Your latest message — pinned above the activity so it never scrolls away.
-    private var prompt: FeedItem? { session.feed.last(where: { $0.kind == .user }) }
+    private static let fade: CGFloat = 22
 
-    /// Everything the agent did since that message (capped).
+    /// Your latest message and everything the agent did since (capped).
     private var items: [FeedItem] {
         let feed = session.feed
         guard let u = feed.lastIndex(where: { $0.kind == .user }) else { return Array(feed.suffix(30)) }
-        return Array(feed[(u + 1)...].suffix(40))
+        return [feed[u]] + feed[(u + 1)...].suffix(40)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let prompt { FeedRow(item: prompt, tint: tint) }
-            activity
-        }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Theme.fill.opacity(0.6)))
-    }
-
-    private var tint: Color { session.tint }
-
-    @ViewBuilder private var activity: some View {
-        Group {
-            if items.isEmpty {
-                Text(session.status == .working ? "Working…" : "No activity yet")
-                    .font(.system(size: 12.5)).foregroundStyle(Theme.tertiary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 8)
-            } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 10) {
-                            ForEach(items) { item in FeedRow(item: item, tint: session.tint).id(item.id) }
-                            if session.status == .working, items.last?.status != .running {
-                                WorkingRow(tint: session.tint).id("working")
-                            }
+        let items = self.items
+        if items.isEmpty, !session.lastMessage.isEmpty {
+            FeedRow(item: FeedItem(id: "last", kind: .assistant, text: session.lastMessage, date: session.turnEndedAt ?? Date()),
+                    tint: session.tint)
+        } else if items.isEmpty {
+            Text(session.status == .working ? "Working…" : "No activity yet")
+                .font(.system(size: 12.5)).foregroundStyle(Theme.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 8)
+        } else {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(items) { item in FeedRow(item: item, tint: session.tint).id(item.id) }
+                        if session.status == .working, items.last?.status != .running {
+                            WorkingRow(tint: session.tint).id("working")
                         }
-                        .padding(.vertical, 4)
                     }
-                    .scrollIndicators(.never)
-                    .defaultScrollAnchor(.bottom)
-                    .frame(maxHeight: 260)
-                    .mask(
-                        VStack(spacing: 0) {
-                            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 14)
-                            Color.black
-                        }
-                    )
-                    .fixedSize(horizontal: false, vertical: true)
-                    .onChange(of: items.last?.id) { _, id in
-                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id ?? "working", anchor: .bottom) }
+                    .padding(.vertical, 4)
+                }
+                .scrollIndicators(.never)
+                .defaultScrollAnchor(.bottom)
+                .frame(maxHeight: 320)
+                .onScrollGeometryChange(for: [Bool].self) { g in
+                    [g.contentOffset.y > 2, g.contentOffset.y + g.containerSize.height < g.contentSize.height - 2]
+                } action: { _, v in
+                    withAnimation(.easeOut(duration: 0.15)) { moreAbove = v[0]; moreBelow = v[1] }
+                }
+                .mask(
+                    VStack(spacing: 0) {
+                        LinearGradient(colors: [moreAbove ? .clear : .black, .black], startPoint: .top, endPoint: .bottom)
+                            .frame(height: Self.fade)
+                        Color.black
+                        LinearGradient(colors: [.black, moreBelow ? .clear : .black], startPoint: .top, endPoint: .bottom)
+                            .frame(height: Self.fade)
                     }
+                )
+                .fixedSize(horizontal: false, vertical: true)
+                .onChange(of: items.last?.id) { _, id in
+                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id ?? "working", anchor: .bottom) }
                 }
             }
         }
@@ -802,9 +903,6 @@ struct ExternalBody: View {
 struct FinishedView: View {
     let session: AgentSession
     let reply: PendingRequest?
-    @State private var text = ""
-    @State private var sent = false
-    @FocusState private var focused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -847,53 +945,11 @@ struct FinishedView: View {
             .font(.system(size: 12)).foregroundStyle(Theme.tertiary)
 
             if let reply {
-                HStack(spacing: 8) {
-                    HStack {
-                        TextField("Reply to keep going…", text: $text)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 13.5))
-                            .foregroundStyle(Theme.primary)
-                            .focused($focused)
-                            .onSubmit(send)
-                            .disabled(sent)
-                        if sent { Text("Sent").font(.system(size: 12)).foregroundStyle(Theme.tertiary) }
-                    }
-                    .padding(.horizontal, 16)
-                    .frame(height: 40)
-                    .background(Capsule().fill(Theme.fill))
-
-                    Button(action: send) {
-                        ZStack {
-                            if case .reply(let deadline) = reply.kind, !sent, text.isEmpty {
-                                TimelineView(.periodic(from: .now, by: 1)) { _ in
-                                    let total = max(1, deadline.timeIntervalSince(reply.createdAt))
-                                    let left = max(0, deadline.timeIntervalSinceNow)
-                                    Circle().trim(from: 0, to: left / total)
-                                        .stroke(Theme.onAction.opacity(0.35), style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                                        .rotationEffect(.degrees(-90))
-                                        .padding(4)
-                                        .animation(.linear(duration: 1), value: left)
-                                }
-                            }
-                            Image(systemName: sent ? "checkmark" : "arrow.up").font(.system(size: 14, weight: .semibold))
-                        }
-                        .foregroundStyle(Theme.onAction)
-                        .frame(width: 40, height: 40)
-                        .background(Circle().fill(Theme.action))
-                    }
-                    .buttonStyle(.plain)
+                ReplyBar(session: session, request: reply) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { IslandModel.shared.collapse() }
                 }
-                .onChange(of: text) { _, t in reply.hold = !t.isEmpty || focused }
-                .onChange(of: focused) { _, f in reply.hold = f || !text.isEmpty }
             }
         }
         .padding(20)
-    }
-
-    private func send() {
-        guard let reply, !sent, !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        sent = true
-        AgentStore.shared.reply(reply, text: text)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { IslandModel.shared.collapse() }
     }
 }

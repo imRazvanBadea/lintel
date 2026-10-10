@@ -53,6 +53,9 @@ done
 d theme-light
 demo; shot question-light light demo-question
 demo; shot detail-light light agents select-demo-1
+demo; shot compose-light light demo-compose
+demo; shot reply-dark dark theme-dark demo-reply
+d theme-light
 
 echo "Built-in display (notch)…"
 d display-builtIn
