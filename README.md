@@ -26,7 +26,7 @@ waiting for you. Lintel puts all of them in one place, at the top of the screen.
 or send a follow-up without leaving what you're doing. And since you're probably listening to music while they work,
 the other side of the notch shows that too.
 
-- **Native and light.** Swift + SwiftUI, no dependencies, a 1.4 MB download. It uses ~0% CPU at rest; spinners and
+- **Native and light.** Swift + SwiftUI, no dependencies, a 1.6 MB download. It uses ~0% CPU at rest; spinners and
   equalisers animate in Core Animation, not in the app.
 - **Local first.** Agents talk to Lintel over `127.0.0.1` with a private token. The only request Lintel makes itself
   is a daily look at this repo's latest release, which you can turn off.
