@@ -73,11 +73,14 @@ enum AgentHooks {
 
     /// Shared secret so other local processes can't drive the notch.
     static func token() -> String {
+        // ~/.lintel holds pasted images, launch scripts with your prompts and usage logs: yours only.
+        // (macOS lets other accounts on the Mac look inside home folders by default.)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
         if let t = try? String(contentsOf: tokenURL, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
             return t
         }
         let t = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try? t.write(to: tokenURL, atomically: true, encoding: .utf8)
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tokenURL.path)
         return t

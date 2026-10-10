@@ -109,7 +109,8 @@ final class HookServer: @unchecked Sendable {
             guard let i = line.firstIndex(of: ":") else { continue }
             headers[line[..<i].lowercased()] = line[line.index(after: i)...].trimmingCharacters(in: .whitespaces)
         }
-        let length = Int(headers["content-length"] ?? "0") ?? 0
+        // A missing, malformed or negative length means an empty body (never trust it for `prefix`).
+        let length = max(0, Int(headers["content-length"] ?? "0") ?? 0)
         let body = buf[headerEnd.upperBound...]
         guard body.count >= length else { return nil }
         return Request(path: String(requestLine[1]), headers: headers, body: Data(body.prefix(length)))
@@ -117,13 +118,23 @@ final class HookServer: @unchecked Sendable {
 
     private func dispatch(_ req: Request, on c: NWConnection) {
         let responder = Responder(c)
-        guard req.headers["x-lintel-token"] == token else {
+        guard Self.equalInConstantTime(req.headers["x-lintel-token"] ?? "", token) else {
             responder.respond("", status: "403 Forbidden")
             return
         }
         // Watch for the client hanging up while we hold the response.
         watchClose(c, responder)
         DispatchQueue.main.async { self.handler(req, responder) }
+    }
+
+    /// Compares without returning early, so the time taken doesn't hint at how much of the token matched.
+    private static func equalInConstantTime(_ a: String, _ b: String) -> Bool {
+        let x = Array(a.utf8), y = Array(b.utf8)
+        var diff = UInt8(x.count == y.count ? 0 : 1)
+        for i in 0..<max(x.count, y.count) {
+            diff |= (i < x.count ? x[i] : 0) ^ (i < y.count ? y[i] : 0)
+        }
+        return diff == 0
     }
 
     private func watchClose(_ c: NWConnection, _ r: Responder) {

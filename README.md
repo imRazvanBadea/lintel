@@ -240,8 +240,8 @@ YouTube Music tab ── AppleScript → page JavaScript ───────�
   `~/.codex/sessions`), in the background, and cached in `~/Library/Caches/Lintel`. Cursor's comes from its hooks
   and is kept in `~/.lintel/cursor-usage.jsonl`.
 - **Music.** Since macOS 15.4 the system Now Playing service only answers Apple-signed processes. So a ~160-line
-  bridge (`Bridge/LintelNowPlaying.m`) is loaded into `/usr/bin/perl` and streams JSON to Lintel over a pipe. The
-  same technique is used by other now-playing utilities. It's event-driven; nothing polls.
+  bridge (`Bridge/LintelNowPlaying.m`) is loaded into `/usr/bin/perl` and streams JSON to Lintel over a pipe. It's
+  event-driven; nothing polls.
 
 ### Privacy and security
 
@@ -316,10 +316,10 @@ polls when it doesn't have to) and test both themes and both the notch and capsu
 2. Quit Lintel from the menu bar icon.
 3. Delete `Lintel.app` (from Applications or `~/Applications`), `~/.lintel` and `~/Library/Caches/Lintel`.
 
-## Credits
+## Trademarks
 
-Lintel is an independent open-source project, not affiliated
-with Anthropic, Anysphere (Cursor), OpenAI or Apple. All trademarks belong to their owners.
+Lintel is an independent open-source project, not affiliated with Anthropic, Anysphere (Cursor), OpenAI or Apple.
+All trademarks belong to their owners.
 
 ## License
 

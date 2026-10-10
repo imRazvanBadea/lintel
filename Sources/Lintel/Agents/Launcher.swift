@@ -138,6 +138,8 @@ enum Launcher {
     /// Returns the session id when it is known up front (Claude Code takes one on the command line).
     static func launch(_ kind: AgentKind, folder: String, prompt: String, images: [URL] = []) -> Result<String?, Failure> {
         // The apps only take text from outside, so images travel as paths in the message.
+        // A prompt starting with "-" would be read by the CLI as an option; a leading space keeps it a message.
+        let prompt = prompt.hasPrefix("-") ? " " + prompt : prompt
         let message = Attachments.message(prompt, images)
         remember(folder)
         let terminal = Settings.shared.launchTerminal
@@ -272,7 +274,7 @@ enum Launcher {
     /// deeplink, which fills in whichever Cursor window is in front.
     private static func openInCursorApp(folder: String, prompt: String) {
         guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: AgentStore.cursorBundleID) else { return }
-        let sendPrompt = {
+        let sendPrompt: @MainActor @Sendable () -> Void = {
             guard !prompt.isEmpty else { return }
             var c = URLComponents(string: "cursor://anysphere.cursor-deeplink/prompt")!
             c.queryItems = [URLQueryItem(name: "text", value: prompt)]
