@@ -28,6 +28,7 @@ enum Sounds {
     static func play(_ event: Event, for session: AgentSession?) {
         let s = Settings.shared
         guard s.playSounds else { return }
+        if AwakeController.shared.mode == .lidClosed { return } // lid shut: the Mac may be in a bag or a meeting
         if s.muteWhenFocused, let session, AgentStore.shared.isHostAppFrontmost(session) { return }
         play(event == .needsYou ? s.needsYouSound : s.finishedSound)
     }

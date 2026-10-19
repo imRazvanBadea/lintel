@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 /// Runs the MediaRemote bridge (Bridge/LintelNowPlaying.m) inside /usr/bin/perl and streams its output.
 /// See the bridge source for why it has to live in a platform binary.
@@ -94,6 +94,15 @@ final class NowPlayingBridge {
         }
     }
 
+    /// WebKit plays media from its GPU helper ("<App> Graphics and Media"), so for web views and
+    /// Safari web apps the reported pid is the helper's. Map it back to the app it works for.
+    private static func hostBundle(_ bundle: String, pid: pid_t) -> String {
+        guard bundle.hasPrefix("com.apple.WebKit."), pid > 0 else { return bundle }
+        let host = responsiblePID(pid)
+        guard host > 0, host != pid, let id = NSRunningApplication(processIdentifier: host)?.bundleIdentifier else { return bundle }
+        return id
+    }
+
     private func parse(_ line: Data) {
         guard let d = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] else { return }
         if let err = d["error"] as? String { NSLog("Lintel: now-playing bridge: \(err)"); return }
@@ -103,7 +112,7 @@ final class NowPlayingBridge {
         let rate = (d["rate"] as? NSNumber)?.doubleValue ?? 0
         let ts = (d["timestamp"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) } ?? Date()
         let snap = Snapshot(
-            bundleID: d["bundle"] as? String ?? "",
+            bundleID: Self.hostBundle(d["bundle"] as? String ?? "", pid: (d["pid"] as? NSNumber)?.int32Value ?? 0),
             playing: (d["playing"] as? Bool ?? false) || rate > 0,
             title: title,
             artist: d["artist"] as? String ?? "",
@@ -118,3 +127,6 @@ final class NowPlayingBridge {
         onState?(snap)
     }
 }
+
+@_silgen_name("responsibility_get_pid_responsible_for_pid")
+private func responsiblePID(_ pid: pid_t) -> pid_t

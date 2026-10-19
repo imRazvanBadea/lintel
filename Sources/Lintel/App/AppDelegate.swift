@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 20) { UsageHistory.shared.refresh() }
         NowPlaying.shared.start()
         Updater.shared.start()
+        AwakeController.shared.start()
         notch = NotchController()
 
         setUpStatusItem()
@@ -112,6 +113,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let data = (try? JSONSerialization.data(withJSONObject: obj, options: .prettyPrinted)) ?? Data()
                 responder.respond(String(data: data, encoding: .utf8) ?? "")
                 return
+            case "awake-state":
+                // What the lid-closed mode sees and would pause right now (nothing is paused).
+                let a = AwakeController.shared, store = AgentStore.shared
+                let plan = AppFreezer.plan(keepBundles: Set(store.sessions.compactMap { store.hostBundleID($0) }),
+                                           agentPIDs: store.sessions.compactMap(\.agentPID))
+                let obj: [String: Any] = [
+                    "mode": "\(a.mode)", "setUp": a.isSetUp, "blocked": a.blockedReason ?? "",
+                    "running": a.runningAgents.map(\.displayTitle),
+                    "keep": Array(Set(store.sessions.compactMap { store.hostBundleID($0) })),
+                    "wouldPause": plan.map { "\($0.name) (\($0.procs.count) processes)" },
+                    "externalDisplay": AwakeController.externalDisplayConnected(),
+                    "battery": AwakeController.battery().map { "\($0.percent)% onAC=\($0.onAC)" } ?? "none",
+                ]
+                let data = (try? JSONSerialization.data(withJSONObject: obj, options: .prettyPrinted)) ?? Data()
+                responder.respond(String(data: data, encoding: .utf8) ?? "")
+                return
             case "codex-readiness":
                 AgentHooks.codexReadiness { r in DispatchQueue.main.async { responder.respond("\(r)") } }
                 return
@@ -167,6 +184,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Settings.shared.onMenuBarIconChange = { [weak self] in
             self?.statusItem.isVisible = Settings.shared.showMenuBarIcon
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // Turn sleep back on and resume paused apps before going.
+        AwakeController.shared.shutdown()
     }
 
     /// Opening Lintel again (Spotlight, Finder, Dock) brings up Settings — the way back when the icon is hidden.

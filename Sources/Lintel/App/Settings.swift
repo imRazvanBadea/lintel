@@ -62,6 +62,14 @@ final class Settings {
     /// Start sessions in the tool's own app (Claude, Cursor) rather than the terminal, when it has one.
     var launchInApp: Bool { didSet { d.set(launchInApp, forKey: "launchInApp") } }
     var checkForUpdates: Bool { didSet { d.set(checkForUpdates, forKey: "checkForUpdates"); Updater.shared.start() } }
+    /// Keep the Mac awake while agents run, so the lid can close (needs the one-time setup).
+    var keepAgentsAwake: Bool { didSet { d.set(keepAgentsAwake, forKey: "keepAgentsAwake") } }
+    /// With the lid closed, pause the apps agents don't need.
+    var pauseAppsWhenLidClosed: Bool { didSet { d.set(pauseAppsWhenLidClosed, forKey: "pauseAppsWhenLidClosed") } }
+    var lowPowerWhenLidClosed: Bool { didSet { d.set(lowPowerWhenLidClosed, forKey: "lowPowerWhenLidClosed") } }
+    /// Hotspot Hopper: join this network (your iPhone's hotspot) if the Wi-Fi drops with the lid closed.
+    var hotspotEnabled: Bool { didSet { d.set(hotspotEnabled, forKey: "hotspotEnabled") } }
+    var hotspotSSID: String { didSet { d.set(hotspotSSID, forKey: "hotspotSSID"); HotspotHopper.shared.forgetPassword() } }
 
     var launchAtLogin: Bool {
         get { SMAppService.mainApp.status == .enabled }
@@ -105,6 +113,10 @@ final class Settings {
             "launchInApp": true,
             "showMenuBarIcon": true,
             "notchStyle": NotchStyle.minimal.rawValue,
+            "keepAgentsAwake": true,
+            "pauseAppsWhenLidClosed": true,
+            "lowPowerWhenLidClosed": true,
+            "hotspotEnabled": false,
         ])
         appearance = AppearanceChoice(rawValue: d.string(forKey: "appearance") ?? "") ?? .system
         display = DisplayChoice(rawValue: d.string(forKey: "display2") ?? "") ?? .follow
@@ -127,5 +139,10 @@ final class Settings {
         launchInApp = d.bool(forKey: "launchInApp")
         launchAgent = AgentKind(rawValue: d.string(forKey: "launchAgent") ?? "") ?? .claude
         notchStyle = NotchStyle(rawValue: d.string(forKey: "notchStyle") ?? "") ?? .minimal
+        keepAgentsAwake = d.bool(forKey: "keepAgentsAwake")
+        pauseAppsWhenLidClosed = d.bool(forKey: "pauseAppsWhenLidClosed")
+        lowPowerWhenLidClosed = d.bool(forKey: "lowPowerWhenLidClosed")
+        hotspotEnabled = d.bool(forKey: "hotspotEnabled")
+        hotspotSSID = d.string(forKey: "hotspotSSID") ?? ""
     }
 }

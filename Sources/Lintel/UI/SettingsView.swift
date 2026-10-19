@@ -77,6 +77,8 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
+            AwakeSettingsSection()
+
             Section("Notch") {
                 Picker("Appearance", selection: $s.appearance) {
                     ForEach(AppearanceChoice.allCases) { Text($0.label).tag($0) }

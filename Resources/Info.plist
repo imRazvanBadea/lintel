@@ -15,9 +15,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.0</string>
+	<string>1.1.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>2</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>15.0</string>
 	<key>LSUIElement</key>
@@ -26,5 +26,9 @@
 	<string>Lintel reads what's playing in Apple Music and YouTube Music (in your browser) and controls playback from the notch.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSLocationUsageDescription</key>
+	<string>macOS only shows Wi-Fi network names to apps with Location access. Lintel uses it to find your iPhone's hotspot when the Wi-Fi drops. It never reads your location.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>macOS only shows Wi-Fi network names to apps with Location access. Lintel uses it to find your iPhone's hotspot when the Wi-Fi drops. It never reads your location.</string>
 </dict>
 </plist>

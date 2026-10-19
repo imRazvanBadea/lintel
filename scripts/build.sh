@@ -26,9 +26,17 @@ if [ ! -f build/AppIcon.icns ]; then
 fi
 cp build/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
-codesign --force --sign - "$APP/Contents/Resources/libLintelNowPlaying.dylib"
-codesign --force --sign - "$APP/Contents/MacOS/lintel-hook"
-codesign --force --sign - --identifier com.razvanbadea.lintel "$APP"
+# Ad-hoc signatures are tied to the exact binary, so macOS forgets granted permissions
+# (Device Control and Data Access) on every rebuild. Local installs sign with your
+# Apple Development certificate when there is one, which keeps them. LINTEL_SIGN overrides.
+SIGN="${LINTEL_SIGN:--}"
+if [ "$1" = "--install" ] && [ -z "$LINTEL_SIGN" ]; then
+  DEV_ID="$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1)"
+  [ -n "$DEV_ID" ] && SIGN="$DEV_ID"
+fi
+codesign --force --sign "$SIGN" "$APP/Contents/Resources/libLintelNowPlaying.dylib"
+codesign --force --sign "$SIGN" "$APP/Contents/MacOS/lintel-hook"
+codesign --force --sign "$SIGN" --identifier com.razvanbadea.lintel "$APP"
 echo "Built $APP ($(du -sh "$APP" | cut -f1))"
 
 if [ "$1" = "--install" ]; then

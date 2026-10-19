@@ -192,7 +192,7 @@ final class NowPlaying {
     private func applyWeb(_ r: WebQueueReader.Result) {
         switch r {
         case .queue(let label, let tracks):
-            sourceLabel = "\(label) · \(appName)"
+            sourceLabel = label == appName ? label : "\(label) · \(appName)"
             hint = nil
             webQueue = tracks
         case .blocked(let h):

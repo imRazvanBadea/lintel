@@ -287,6 +287,10 @@ struct SessionListView: View {
                 if !store.working.isEmpty {
                     Text("\(store.working.count) working").font(.system(size: 12.5)).foregroundStyle(Theme.tertiary)
                 }
+                if AwakeController.shared.mode != .off {
+                    Image(systemName: "eye").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Theme.tertiary)
+                        .help("You can close the lid: your agents keep running and the Mac sleeps when they're done.")
+                }
                 Spacer(minLength: 0)
                 Button { model.composing = true } label: {
                     Image(systemName: "plus").font(.system(size: 13, weight: .semibold))

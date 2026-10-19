@@ -36,6 +36,8 @@ final class UsageStore {
     @ObservationIgnored private var lastProbe = Date.distantPast
     @ObservationIgnored private var probing = false
     @ObservationIgnored private var probeFailures = 0
+    /// Claude Code answered but has no login (people who only use the Claude app), so it can't report usage.
+    @ObservationIgnored private var claudeSignedOut = false
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private let claudeLog = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/Claude/plan-usage-history.json")
@@ -56,6 +58,7 @@ final class UsageStore {
         if AgentStore.shared.sessions.contains(where: { $0.kind == .claude }) { probeClaude(minInterval: 170) }
         // The app's 15-minute log is only a fallback for when Claude Code can't be asked.
         if (Self.claudeExecutable() == nil || probeFailures > 0), Date().timeIntervalSince(lastExact) > 15 * 60 { readClaudeAppLog() }
+        dropStaleClaudeEstimate()
         if usage[.cursor]?.plan == nil, let plan = Self.cursorPlan() {
             usage[.cursor] = Usage(plan: plan.capitalized, note: "Cursor doesn't share plan usage with other apps. Open Usage to see it in Cursor's dashboard.")
         }
@@ -116,6 +119,8 @@ final class UsageStore {
         Self.askClaudeCode(configDir: nil) { [weak self] resp in
             guard let self else { return }
             self.probing = false
+            self.claudeSignedOut = resp != nil && resp?["rate_limits"] as? [String: Any] == nil
+                && resp?["subscription_type"] as? String == nil
             if let resp, let limits = resp["rate_limits"] as? [String: Any] {
                 self.probeFailures = 0
                 self.applyClaudeStatusLine(["rate_limits": limits])
@@ -302,8 +307,24 @@ final class UsageStore {
                 u.updatedAt = last.t
                 u.note = nil
                 UsageStore.shared.usage[.claude] = u
+                UsageStore.shared.dropStaleClaudeEstimate()
             }
         }
+    }
+
+    /// The Claude app only adds to its log now and then (sometimes not for a day), so an old sample isn't
+    /// shown as current usage; the row says why there are no numbers instead.
+    private func dropStaleClaudeEstimate() {
+        var u = usage[.claude] ?? Usage()
+        let exact = u.short.map { !$0.estimated } ?? false
+        guard !exact, u.short == nil || Date().timeIntervalSince(u.updatedAt) > 3600 else { return }
+        guard u.short != nil || claudeSignedOut else { return }
+        u.short = nil
+        u.weekly = nil
+        u.note = claudeSignedOut
+            ? "Claude Code isn't signed in on this Mac, so live usage isn't available. Run claude in Terminal and sign in with /login."
+            : "The Claude app hasn't logged usage recently. Live numbers come back once Claude Code answers."
+        if u != usage[.claude] { usage[.claude] = u }
     }
 
     // MARK: Codex

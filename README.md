@@ -85,6 +85,27 @@ Lintel records it from Cursor's hooks from the moment you connect.</sub>
   <img src="docs/images/reply-dark.png" width="49%" alt="Replying to a finished turn (dark)">
 </p>
 
+### Close the lid, agents keep going
+
+Close the lid and walk away: the agents Lintel shows keep running, and everything they don't need is paused.
+
+- **No timer.** While an agent is working (or waiting on you, for up to your prompt timeout) the Mac doesn't sleep.
+  A couple of minutes after the last one finishes, Lintel turns sleep back on, and with the lid closed the Mac
+  sleeps right away.
+- **Only your agents run.** With the lid closed, Lintel pauses every Dock app that isn't hosting a session (Slack,
+  Discord, Messages, Spotify, Figma…), turns the display off and turns on Low Power Mode. Terminals, editors, the
+  Claude, Codex and Cursor apps, browsers, meeting apps and password managers keep running. Opening the lid resumes
+  everything. With an external display connected, nothing is paused.
+- **Hotspot Hopper.** If the Wi-Fi drops while the lid is closed (you left the office with it under your arm),
+  Lintel joins your iPhone's Personal Hotspot so the agents' API calls keep going.
+- **Safe by default.** Below 10% battery, or when the Mac gets critically hot, it sleeps anyway. If Lintel quits or
+  crashes, a small watchdog turns sleep back on and resumes the paused apps within a minute. Use a well-ventilated
+  surface, not a closed bag.
+
+It needs a one-time setup in Settings › When the lid closes (your admin password; see
+[How it works](#close-the-lid-how-it-works)). The approach comes from [Insomnia](https://github.com/krishhgg/Insomnia)
+(MIT).
+
 ### Usage history
 
 What your agents used over the last 24 hours, 7, 30 or 90 days, as **cost** or **tokens**, per tool and per model,
@@ -180,8 +201,11 @@ Sessions that start after connecting show up. **Disconnect** removes only Lintel
 |---|---|
 | *Lintel wants to control Terminal / iTerm* | To bring the exact tab of a session to the front when you jump to it. |
 | *Lintel wants to control Dia / Chrome / Safari…* | To read YouTube Music's up-next queue and focus its tab. Also turn on **Allow JavaScript from Apple Events** in the browser (Chromium browsers: View › Developer; Safari: Develop). |
+| *Device Control and Data Access* (Accessibility before macOS 27) | Only if you play YouTube Music in a Safari web app (Add to Dock): those can't be scripted, so Lintel reads the up-next list from the window instead. |
+| *Lintel wants to make changes* (admin password) | Only when you click **Set Up** for the lid-closed mode, once. |
+| *Lintel would like to use your location* | Only if you turn on Hotspot Hopper: macOS shows Wi-Fi names only to apps with Location access. Lintel never reads your location. |
 
-No Accessibility, Screen Recording or Full Disk Access permission is needed.
+No Screen Recording or Full Disk Access permission is needed.
 
 ## Using it
 
@@ -243,6 +267,26 @@ YouTube Music tab ── AppleScript → page JavaScript ───────�
   bridge (`Bridge/LintelNowPlaying.m`) is loaded into `/usr/bin/perl` and streams JSON to Lintel over a pipe. It's
   event-driven; nothing polls.
 
+### Close the lid: how it works
+
+macOS has no public way to keep a laptop on battery awake with the lid closed. Lintel uses `pmset -a disablesleep`,
+which needs root. **Set Up** asks for your admin password once and installs:
+
+- `/etc/sudoers.d/lintel`, letting your account run exactly these four commands without a password (checked with
+  `visudo` first):
+  `pmset -a disablesleep 1`, `pmset -a disablesleep 0`, `pmset -b lowpowermode 1`, `pmset -b lowpowermode 0`.
+  Any program running as you could use that rule too, so it's limited to those four.
+- A watchdog, `~/Library/LaunchAgents/com.razvanbadea.lintel.backstop.plist`, which runs
+  `~/Library/Application Support/Lintel/backstop.sh` every minute. It does nothing while Lintel is running.
+
+Sleep has to be off *before* the lid closes (a normal Mac is asleep before any app hears about it), so Lintel turns
+it off as soon as an agent starts working, not when the lid closes. The lid itself is watched through IOKit. Apps are
+paused with `SIGSTOP` and resumed with `SIGCONT`, and before pausing anything Lintel writes what it changed to
+`~/Library/Application Support/Lintel/awake.json`, so the watchdog or the next launch can undo it. It only resumes
+processes whose start time matches what it recorded. The display goes off with `pmset displaysleepnow`. A working
+agent with no news for 30 minutes counts as stuck and stops keeping the Mac awake. The hotspot password is kept in your
+login Keychain and the network is joined with CoreWLAN.
+
 ### Privacy and security
 
 - The hook server listens only on `127.0.0.1`, and every request must carry a random token from
@@ -265,6 +309,10 @@ YouTube Music tab ── AppleScript → page JavaScript ───────�
   after that install without asking.
 - **Regular Claude chats** (claude.ai or the desktop app's Chat tab) aren't shown. They expose no hooks or local
   state for other apps to follow. Claude Code sessions in the desktop app are shown.
+- **Lid closed.** The built-in microphone is disconnected in hardware when the lid closes. A single tool call that
+  runs longer than 30 minutes without any hook event (a very long build or test run) counts as stuck. Hotspot Hopper
+  needs the iPhone nearby with Personal Hotspot available; because Lintel is ad-hoc signed, macOS may ask once after an
+  update before Lintel can read the hotspot password again.
 - **The notch** can't detect where other apps' menu bar icons are, which is why the default notch style stays tucked
   in.
 
@@ -311,10 +359,12 @@ polls when it doesn't have to) and test both themes and both the notch and capsu
 
 ## Uninstall
 
+1. Settings › When the lid closes › **Remove…** (removes the sudoers rule and the watchdog).
 1. Settings › Agents › **Disconnect** Claude Code, Cursor and Codex. This removes only Lintel's entries, including
    the status line it added.
 2. Quit Lintel from the menu bar icon.
-3. Delete `Lintel.app` (from Applications or `~/Applications`), `~/.lintel` and `~/Library/Caches/Lintel`.
+3. Delete `Lintel.app` (from Applications or `~/Applications`), `~/.lintel`, `~/Library/Caches/Lintel` and
+   `~/Library/Application Support/Lintel`.
 
 ## Trademarks
 
