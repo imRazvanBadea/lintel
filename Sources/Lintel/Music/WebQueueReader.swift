@@ -141,6 +141,9 @@ final class WebQueueReader {
 
     private static let axQueue = DispatchQueue(label: "lintel.ax-queue", qos: .userInitiated)
     private var askedForAccess = false
+    /// YouTube Music hides the queue from Accessibility while its player view is closed, so we keep
+    /// the last full queue we saw and follow the current song through it.
+    private var lastQueue: [Track] = []
 
     private func readWebApp(bundleID id: String) {
         guard AXIsProcessTrusted() else {
@@ -162,9 +165,15 @@ final class WebQueueReader {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self.inFlight = false
-                    guard let items else { self.onResult?(.none); return }
-                    let tracks = AXQueue.upcoming(items, now: now).prefix(7).map { Track(title: $0.title, artist: $0.artist) }
-                    self.onResult?(.queue(label: "YouTube Music", tracks: Array(tracks)))
+                    if let items, AXQueue.currentIndex(items, now: now) != nil {
+                        self.lastQueue = items.map { Track(title: $0.title, artist: $0.artist) }
+                        let tracks = AXQueue.upcoming(items, now: now).prefix(7).map { Track(title: $0.title, artist: $0.artist) }
+                        self.onResult?(.queue(label: "YouTube Music", tracks: Array(tracks)))
+                    } else if let i = self.lastQueue.firstIndex(where: { $0.title == now }) {
+                        self.onResult?(.queue(label: "YouTube Music", tracks: Array(self.lastQueue[(i + 1)...].prefix(7))))
+                    } else {
+                        self.onResult?(.blocked("Open the player in YouTube Music once so Lintel can see what's up next."))
+                    }
                 }
             }
         }
@@ -178,6 +187,13 @@ final class WebQueueReader {
             if let items = AXQueue.items(pid: pid), let cur = AXQueue.currentIndex(items, now: now),
                items.indices.contains(cur + offset) {
                 AXUIElementPerformAction(items[cur + offset].button, kAXPressAction as CFString)
+            } else {
+                // The queue isn't on screen (remembered list): skip forward to the song instead.
+                for k in 0..<offset {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35 * Double(k)) {
+                        MainActor.assumeIsolated { NowPlaying.shared.next() }
+                    }
+                }
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                 MainActor.assumeIsolated { self.read(bundleID: id) }
